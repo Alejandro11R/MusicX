@@ -31,3 +31,7 @@ npm run tauri dev
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why things are built the
 way they are — mpv/yt-dlp choices, the search/resolve_audio split, and a
 couple of real bugs worth not repeating.
+
+See [docs/UI.md](docs/UI.md) for the visual identity — a compact launcher,
+not a Bitácora-style panel app, even though it reuses Bitácora's design
+tokens and spacing scale.
