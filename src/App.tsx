@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   search,
   play,
@@ -6,16 +6,33 @@ import {
   resume,
   stop,
   setVolume,
+  getState,
+  type PlayerState,
   type SearchResult,
 } from "./lib/tauri";
+
+const POLL_INTERVAL_MS = 1000;
 
 function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [current, setCurrent] = useState<SearchResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [volume, setVolumeValue] = useState(100);
+  const [playerState, setPlayerState] = useState<PlayerState | null>(null);
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        setPlayerState(await getState());
+      } catch (err) {
+        // A failed background poll shouldn't spam the visible error banner.
+        console.error("state() poll failed:", err);
+      }
+    };
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -32,7 +49,6 @@ function App() {
     setIsLoading(true);
     try {
       await play(track);
-      setCurrent(track);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -62,21 +78,20 @@ function App() {
     setError(null);
     try {
       await stop();
-      setCurrent(null);
     } catch (err) {
       setError(String(err));
     }
   }
 
   async function handleVolumeChange(e: ChangeEvent<HTMLInputElement>) {
-    const level = Number(e.currentTarget.value);
-    setVolumeValue(level);
     try {
-      await setVolume(level);
+      await setVolume(Number(e.currentTarget.value));
     } catch (err) {
       setError(String(err));
     }
   }
+
+  const volume = playerState?.volume ?? 100;
 
   return (
     <main>
@@ -106,8 +121,12 @@ function App() {
       <section>
         <h2>Reproduciendo</h2>
         {isLoading && <p>Cargando...</p>}
-        {!isLoading && current && <p>{current.title}</p>}
-        {!isLoading && !current && <p>(nada)</p>}
+        {!isLoading && (
+          <p>
+            Estado: {playerState?.status ?? "?"}
+            {playerState?.current && ` — ${playerState.current.title}`}
+          </p>
+        )}
 
         <button onClick={handlePause}>Pause</button>
         <button onClick={handleResume}>Resume</button>
