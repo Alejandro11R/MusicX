@@ -47,6 +47,10 @@ impl PlayerService {
         self.mpv.set_volume(level).await
     }
 
+    pub async fn seek(&mut self, position_seconds: f64) -> Result<(), CadenceError> {
+        self.mpv.seek(position_seconds).await
+    }
+
     /// Terminates the underlying mpv process. Call this on app shutdown —
     /// see `MpvPlayer::kill` for why `Drop` alone isn't sufficient.
     pub async fn shutdown(&mut self) {
@@ -90,6 +94,20 @@ mod tests {
             .await
             .expect("search should succeed");
         results.remove(0)
+    }
+
+    /// Polls state() until mpv reports a known duration (i.e. has actually
+    /// opened the stream, not just accepted the loadfile command), up to
+    /// 10s. Panics if it never does — that's a real failure, not something
+    /// to silently tolerate.
+    async fn wait_for_stream_to_open(player: &mut PlayerService) {
+        for _ in 0..20 {
+            if player.state().await.expect("state").duration_seconds > 0.0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        panic!("stream never reported a duration within 10s");
     }
 
     #[tokio::test]
@@ -151,5 +169,36 @@ mod tests {
 
         assert_eq!(state.status, PlaybackStatus::Stopped);
         assert!(state.current.is_none());
+    }
+
+    #[tokio::test]
+    async fn seek_moves_the_playback_position() {
+        let mut player = PlayerService::connect(unique_socket_path())
+            .await
+            .expect("connect");
+        player.play(sample_track().await).await.expect("play");
+
+        // Right after play() returns, only the loadfile command is
+        // confirmed — mpv may not have opened the stream yet, and seeking
+        // fails with "property unavailable" until it has. A fixed sleep
+        // guessed wrong once already (500ms wasn't enough), so poll for
+        // the actual signal (a known duration) instead of a fixed delay.
+        wait_for_stream_to_open(&mut player).await;
+
+        player.seek(30.0).await.expect("seek");
+
+        // set_property("time-pos", ...) reports success as soon as mpv
+        // queues the seek, not once it's actually landed — on a remote
+        // stream that means fetching the new byte range first. Poll for
+        // the real outcome instead of asserting immediately.
+        let mut last_position = 0.0;
+        for _ in 0..20 {
+            last_position = player.state().await.expect("state").position_seconds;
+            if (last_position - 30.0).abs() < 2.0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        panic!("expected position near 30s within 6s, got {last_position}");
     }
 }

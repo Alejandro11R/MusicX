@@ -34,3 +34,11 @@ pub async fn stop(app_state: State<'_, AppState>) -> Result<(), CadenceError> {
 pub async fn set_volume(app_state: State<'_, AppState>, level: f64) -> Result<(), CadenceError> {
     app_state.player.lock().await.set_volume(level).await
 }
+
+#[tauri::command]
+pub async fn seek(
+    app_state: State<'_, AppState>,
+    position_seconds: f64,
+) -> Result<(), CadenceError> {
+    app_state.player.lock().await.seek(position_seconds).await
+}

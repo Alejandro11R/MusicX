@@ -89,6 +89,11 @@ impl MpvPlayer {
         self.set_property("volume", json!(level)).await
     }
 
+    /// Seeks to an absolute position in the current track.
+    pub async fn seek(&mut self, position_seconds: f64) -> Result<(), CadenceError> {
+        self.set_property("time-pos", json!(position_seconds)).await
+    }
+
     /// Forcefully terminates the mpv process. `kill_on_drop` alone is not
     /// enough for app shutdown: Tauri's normal exit path does not
     /// guarantee `Drop` runs (e.g. `std::process::exit`), so callers must
