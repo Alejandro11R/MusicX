@@ -2,9 +2,6 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-// The `Mpv` prefix is redundant while mpv is the only subsystem with error
-// variants; it stops being redundant once yt-dlp errors join this enum.
-#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub enum CadenceError {
     #[error("failed to start mpv: {0}")]
@@ -24,4 +21,22 @@ pub enum CadenceError {
 
     #[error("mpv rejected command {command}: {message}")]
     MpvCommand { command: String, message: String },
+
+    #[error("failed to start yt-dlp: {0}")]
+    YtDlpSpawn(#[source] std::io::Error),
+
+    #[error("I/O error running yt-dlp: {0}")]
+    YtDlpIo(#[source] std::io::Error),
+
+    #[error("yt-dlp did not finish within the timeout")]
+    YtDlpTimeout,
+
+    #[error("yt-dlp exited with an error: {message}")]
+    YtDlpExecution { message: String },
+
+    #[error("failed to parse yt-dlp's output: {0}")]
+    YtDlpParse(#[source] serde_json::Error),
+
+    #[error("yt-dlp found no audio stream for video {video_id}")]
+    YtDlpNoAudioStream { video_id: String },
 }
