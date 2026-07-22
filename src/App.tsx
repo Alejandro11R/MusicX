@@ -20,6 +20,7 @@ import {
   setVolume,
   seek,
   getState,
+  quit,
   type PlayerState,
   type SearchResult,
 } from "./lib/tauri";
@@ -69,7 +70,9 @@ function App() {
 
   // "/" and Ctrl/Cmd+K refocus search from anywhere, like Raycast/Spotlight.
   // "/" only fires when NOT already typing in the search box, so it can
-  // still be typed as a literal character in a query.
+  // still be typed as a literal character in a query. Ctrl/Cmd+Q actually
+  // ends the process — closing the window only hides it (see lib.rs), so
+  // this is the one explicit way out, same as e.g. Discord/Telegram.
   useEffect(() => {
     function handleGlobalKeyDown(e: KeyboardEvent) {
       const isSearchFocused = document.activeElement === searchInputRef.current;
@@ -80,6 +83,9 @@ function App() {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "q") {
+        e.preventDefault();
+        quit();
       }
     }
     document.addEventListener("keydown", handleGlobalKeyDown);

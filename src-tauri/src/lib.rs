@@ -27,6 +27,14 @@ pub fn run() {
     // the error), so this is the one legitimate exception to the no-expect rule.
     #[allow(clippy::expect_used)]
     let app = tauri::Builder::default()
+        // Must be the first plugin registered (Tauri's own requirement) —
+        // it needs to intercept a second launch before anything else runs.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let player = tauri::async_runtime::block_on(PlayerService::connect(socket_path))?;
@@ -45,7 +53,18 @@ pub fn run() {
             commands::playback::seek,
             commands::player::state,
             commands::player::health,
+            commands::app::quit,
         ])
+        // Closing the window hides it instead of quitting — mpv keeps
+        // playing, and a second launch (single-instance, above) just
+        // re-shows this same window. commands::app::quit is the only way
+        // to actually end the process.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 

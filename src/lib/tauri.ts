@@ -63,3 +63,7 @@ export function getState(): Promise<PlayerState> {
 export function health(): Promise<HealthStatus> {
   return invoke("health");
 }
+
+export function quit(): Promise<void> {
+  return invoke("quit");
+}
