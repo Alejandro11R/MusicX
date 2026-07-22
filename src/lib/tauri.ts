@@ -52,6 +52,10 @@ export function setVolume(level: number): Promise<void> {
   return invoke("set_volume", { level });
 }
 
+export function seek(positionSeconds: number): Promise<void> {
+  return invoke("seek", { positionSeconds });
+}
+
 export function getState(): Promise<PlayerState> {
   return invoke("state");
 }

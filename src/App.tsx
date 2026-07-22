@@ -18,12 +18,14 @@ import {
   resume,
   stop,
   setVolume,
+  seek,
   getState,
   type PlayerState,
   type SearchResult,
 } from "./lib/tauri";
 
-const POLL_INTERVAL_MS = 1000;
+// Fast enough for the progress bar to read as live rather than ticking.
+const POLL_INTERVAL_MS = 250;
 
 function formatDuration(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
@@ -41,6 +43,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [playerState, setPlayerState] = useState<PlayerState | null>(null);
+  // While the user is dragging the progress thumb, the 250ms poll must not
+  // fight the drag — this holds the in-progress value instead, and is
+  // cleared once the seek is committed so polling takes back over.
+  const [dragPosition, setDragPosition] = useState<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -164,8 +170,20 @@ function App() {
     }
   }
 
+  async function handleSeekCommit(positionSeconds: number) {
+    try {
+      await seek(positionSeconds);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setDragPosition(null);
+    }
+  }
+
   const volume = playerState?.volume ?? 100;
   const isPlaying = playerState?.status === "Playing";
+  const duration = playerState?.duration_seconds ?? 0;
+  const position = dragPosition ?? playerState?.position_seconds ?? 0;
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden">
@@ -181,6 +199,7 @@ function App() {
             onChange={(e) => setQuery(e.currentTarget.value)}
             onKeyDown={handleSearchKeyDown}
             placeholder="Buscar..."
+            autoComplete="off"
           />
           <Button
             type="button"
@@ -266,6 +285,25 @@ function App() {
                     {playerState.current.artist}
                   </p>
                 )}
+              </div>
+            )}
+
+            {!isLoading && playerState?.current && (
+              <div className="flex items-center gap-2">
+                <span className="w-9 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                  {formatDuration(position)}
+                </span>
+                <Slider
+                  className="flex-1"
+                  value={[position]}
+                  max={Math.max(duration, 1)}
+                  step={1}
+                  onValueChange={([v]) => setDragPosition(v)}
+                  onValueCommit={([v]) => handleSeekCommit(v)}
+                />
+                <span className="w-9 shrink-0 text-xs tabular-nums text-muted-foreground">
+                  {formatDuration(duration)}
+                </span>
               </div>
             )}
 
