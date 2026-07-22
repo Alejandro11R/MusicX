@@ -25,6 +25,7 @@ struct YtDlpEntry {
     title: String,
     artist: Option<String>,
     duration: Option<f64>,
+    ie_key: String,
 }
 
 impl From<YtDlpEntry> for SearchResult {
@@ -46,14 +47,25 @@ pub async fn search(query: &str, limit: u32) -> Result<Vec<SearchResult>, Cadenc
     let output = run_yt_dlp(&["--flat-playlist", "-j", &search_spec]).await?;
 
     // yt-dlp prints one JSON object per line for multi-result searches.
-    output
+    let entries = output
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str::<YtDlpEntry>(line)
-                .map(SearchResult::from)
-                .map_err(CadenceError::YtDlpParse)
-        })
+        .map(|line| serde_json::from_str::<YtDlpEntry>(line).map_err(CadenceError::YtDlpParse))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(filter_playable(entries))
+}
+
+// A search can match a channel/playlist as well as videos (ie_key
+// "YoutubeTab" instead of "Youtube") — not a track resolve_audio() can
+// ever play, so it's dropped here rather than shown as a dead result.
+// This can leave fewer than `limit` results; that's preferable to a
+// result the user can click but nothing will play.
+fn filter_playable(entries: Vec<YtDlpEntry>) -> Vec<SearchResult> {
+    entries
+        .into_iter()
+        .filter(|entry| entry.ie_key == "Youtube")
+        .map(SearchResult::from)
         .collect()
 }
 
@@ -171,11 +183,39 @@ mod tests {
             title: "Some Track".to_string(),
             artist: None,
             duration: Some(120.0),
+            ie_key: "Youtube".to_string(),
         };
 
         let result = SearchResult::from(entry);
 
         assert_eq!(result.thumbnail_url, "https://i.ytimg.com/vi/abc123/hqdefault.jpg");
+    }
+
+    // No network: whether a given query surfaces a channel result isn't
+    // guaranteed to stay reproducible, so this checks the filter directly.
+    #[test]
+    fn filter_playable_drops_non_video_entries() {
+        let entries = vec![
+            YtDlpEntry {
+                id: "abc123".to_string(),
+                title: "A Real Song".to_string(),
+                artist: None,
+                duration: Some(200.0),
+                ie_key: "Youtube".to_string(),
+            },
+            YtDlpEntry {
+                id: "UCRRmSKkhOKEO6vIBaxG-ejA".to_string(),
+                title: "Some Artist".to_string(),
+                artist: None,
+                duration: None,
+                ie_key: "YoutubeTab".to_string(),
+            },
+        ];
+
+        let results = filter_playable(entries);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "abc123");
     }
 
     #[tokio::test]
