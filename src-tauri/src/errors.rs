@@ -39,16 +39,54 @@ pub enum CadenceError {
 
     #[error("yt-dlp found no audio stream for video {video_id}")]
     YtDlpNoAudioStream { video_id: String },
+
+    #[error("YouTube requires sign-in to resolve video {video_id}")]
+    YtDlpAuthRequired { video_id: String },
 }
 
-// Tauri serializes a command's `Err` to send it to the frontend. There's no
-// structured data the UI needs beyond the message, so this just serializes
-// the Display output rather than mirroring the variant structure.
+impl CadenceError {
+    /// A message safe to show the user: no raw process stderr, socket
+    /// paths, or protocol internals — just enough to know what happened
+    /// and whether trying again makes sense. `Display` (used for logs,
+    /// e.g. the `eprintln!` in yt_dlp::resolve_audio) keeps the full detail;
+    /// this is deliberately a separate, shorter message.
+    fn user_message(&self) -> &'static str {
+        match self {
+            CadenceError::YtDlpAuthRequired { .. } => {
+                "This video requires YouTube sign-in or has restrictions. Try another result."
+            }
+            CadenceError::YtDlpNoAudioStream { .. } => {
+                "Couldn't find an audio stream for this track. Try another result."
+            }
+            CadenceError::YtDlpExecution { .. } => "Couldn't play this track. Try another result.",
+            CadenceError::YtDlpTimeout => {
+                "yt-dlp took too long to respond. Check your connection and try again."
+            }
+            CadenceError::YtDlpSpawn(_) | CadenceError::YtDlpIo(_) => {
+                "yt-dlp isn't available. Make sure it's installed."
+            }
+            CadenceError::YtDlpParse(_) => "Got an unexpected response while searching.",
+            CadenceError::MpvSpawn(_)
+            | CadenceError::MpvIo(_)
+            | CadenceError::MpvConnectionClosed
+            | CadenceError::MpvSocketTimeout(_) => {
+                "Lost connection to the audio player. Try restarting Cadence."
+            }
+            CadenceError::MpvSerialize(_) | CadenceError::MpvCommand { .. } => {
+                "The audio player rejected that action."
+            }
+        }
+    }
+}
+
+// Tauri serializes a command's `Err` to send it to the frontend, so this
+// carries the user-facing message rather than the full Display output,
+// which can include raw yt-dlp/mpv internals not fit for the UI.
 impl serde::Serialize for CadenceError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_str(self.user_message())
     }
 }

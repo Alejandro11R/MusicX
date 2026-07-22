@@ -55,7 +55,9 @@ pub async fn search(query: &str, limit: u32) -> Result<Vec<SearchResult>, Cadenc
 /// should not persist it — resolve again when the track is actually played.
 pub async fn resolve_audio(video_id: &str) -> Result<String, CadenceError> {
     let watch_url = format!("https://www.youtube.com/watch?v={video_id}");
-    let output = run_yt_dlp(&["-f", "bestaudio", "-g", &watch_url]).await?;
+    let output = run_yt_dlp(&["-f", "bestaudio", "-g", &watch_url])
+        .await
+        .map_err(|err| annotate_execution_failure(err, video_id))?;
 
     let url = output.lines().next().unwrap_or("").trim();
     if url.is_empty() {
@@ -65,6 +67,27 @@ pub async fn resolve_audio(video_id: &str) -> Result<String, CadenceError> {
     }
 
     Ok(url.to_string())
+}
+
+/// yt-dlp's raw stderr isn't fit to show a user, but it's exactly what's
+/// needed to reproduce a specific failing video from the terminal — log it
+/// here rather than on the error that reaches the frontend, and name the
+/// one failure mode ("Sign in to confirm...", age/region restrictions)
+/// common enough to give its own error variant and message.
+fn annotate_execution_failure(err: CadenceError, video_id: &str) -> CadenceError {
+    let CadenceError::YtDlpExecution { message } = &err else {
+        return err;
+    };
+
+    eprintln!("yt-dlp failed to resolve video {video_id}: {message}");
+
+    if message.to_lowercase().contains("sign in") {
+        CadenceError::YtDlpAuthRequired {
+            video_id: video_id.to_string(),
+        }
+    } else {
+        err
+    }
 }
 
 async fn run_yt_dlp(args: &[&str]) -> Result<String, CadenceError> {
@@ -135,5 +158,33 @@ mod tests {
     async fn resolve_audio_fails_for_a_nonexistent_video_id() {
         let result = resolve_audio("this-id-does-not-exist-000").await;
         assert!(result.is_err());
+    }
+
+    // Doesn't hit the network: real "sign in" restrictions aren't
+    // guaranteed to stay reproducible on a specific video, so this checks
+    // the classification logic directly against a synthetic yt-dlp stderr.
+    #[test]
+    fn recognizes_sign_in_required_as_a_distinct_error() {
+        let raw = CadenceError::YtDlpExecution {
+            message: "ERROR: [youtube] abc123: Sign in to confirm your age.".to_string(),
+        };
+
+        let classified = annotate_execution_failure(raw, "abc123");
+
+        assert!(matches!(
+            classified,
+            CadenceError::YtDlpAuthRequired { video_id } if video_id == "abc123"
+        ));
+    }
+
+    #[test]
+    fn leaves_other_execution_failures_unclassified() {
+        let raw = CadenceError::YtDlpExecution {
+            message: "ERROR: [youtube] abc123: Video unavailable.".to_string(),
+        };
+
+        let classified = annotate_execution_failure(raw, "abc123");
+
+        assert!(matches!(classified, CadenceError::YtDlpExecution { .. }));
     }
 }

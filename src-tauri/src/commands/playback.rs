@@ -9,6 +9,9 @@ use crate::AppState;
 // as `current` without a second round-trip to yt-dlp for its metadata.
 #[tauri::command]
 pub async fn play(app_state: State<'_, AppState>, track: SearchResult) -> Result<(), CadenceError> {
+    // Lets a report like "the third result fails" be reproduced from the
+    // terminal in seconds, instead of guessing which video_id was clicked.
+    eprintln!("Playing: {} (id: {})", track.title, track.id);
     app_state.player.lock().await.play(track).await
 }
 
