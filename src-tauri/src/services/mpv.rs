@@ -27,7 +27,7 @@ pub struct MpvStatus {
 /// process management and JSON IPC framing is contained here.
 pub struct MpvPlayer {
     socket_path: PathBuf,
-    _process: Child,
+    process: Child,
     reader: BufReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
 }
@@ -50,7 +50,7 @@ impl MpvPlayer {
 
         Ok(Self {
             socket_path,
-            _process: process,
+            process,
             reader: BufReader::new(reader),
             writer,
         })
@@ -87,6 +87,14 @@ impl MpvPlayer {
 
     pub async fn set_volume(&mut self, level: f64) -> Result<(), CadenceError> {
         self.set_property("volume", json!(level)).await
+    }
+
+    /// Forcefully terminates the mpv process. `kill_on_drop` alone is not
+    /// enough for app shutdown: Tauri's normal exit path does not
+    /// guarantee `Drop` runs (e.g. `std::process::exit`), so callers must
+    /// invoke this explicitly on `RunEvent::ExitRequested`.
+    pub async fn kill(&mut self) {
+        let _ = self.process.kill().await;
     }
 
     pub async fn state(&mut self) -> Result<MpvStatus, CadenceError> {
@@ -251,5 +259,19 @@ mod tests {
             .expect("connect to mpv");
 
         player.stop().await.expect("mpv should acknowledge stop");
+    }
+
+    #[tokio::test]
+    async fn kill_terminates_the_mpv_process() {
+        let mut player = MpvPlayer::connect(unique_socket_path())
+            .await
+            .expect("connect to mpv");
+        let pid = player.process.id().expect("mpv should have a pid");
+
+        player.kill().await;
+        sleep(Duration::from_millis(200)).await;
+
+        let still_running = std::path::Path::new(&format!("/proc/{pid}")).exists();
+        assert!(!still_running, "mpv process {pid} should have been killed");
     }
 }

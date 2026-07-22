@@ -47,6 +47,12 @@ impl PlayerService {
         self.mpv.set_volume(level).await
     }
 
+    /// Terminates the underlying mpv process. Call this on app shutdown —
+    /// see `MpvPlayer::kill` for why `Drop` alone isn't sufficient.
+    pub async fn shutdown(&mut self) {
+        self.mpv.kill().await;
+    }
+
     pub async fn state(&mut self) -> Result<PlayerState, CadenceError> {
         let mpv_status = self.mpv.state().await?;
 

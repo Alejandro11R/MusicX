@@ -40,3 +40,15 @@ pub enum CadenceError {
     #[error("yt-dlp found no audio stream for video {video_id}")]
     YtDlpNoAudioStream { video_id: String },
 }
+
+// Tauri serializes a command's `Err` to send it to the frontend. There's no
+// structured data the UI needs beyond the message, so this just serializes
+// the Display output rather than mirroring the variant structure.
+impl serde::Serialize for CadenceError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
