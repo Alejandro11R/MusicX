@@ -1,5 +1,5 @@
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tokio::process::Command;
@@ -91,17 +91,39 @@ fn annotate_execution_failure(err: CadenceError, video_id: &str) -> CadenceError
 }
 
 async fn run_yt_dlp(args: &[&str]) -> Result<String, CadenceError> {
+    let start = Instant::now();
+    eprintln!("[yt-dlp] launching: yt-dlp {}", args.join(" "));
+
+    // Without kill_on_drop, a timeout below drops `child.wait_with_output()`
+    // (which owns the Child) without killing the process: yt-dlp keeps
+    // running in the background and, having no reaper left once nothing
+    // awaits it, becomes a zombie the moment it does exit on its own.
     let child = Command::new("yt-dlp")
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(CadenceError::YtDlpSpawn)?;
+    eprintln!(
+        "[yt-dlp] spawned pid={:?} ({:?} since launch)",
+        child.id(),
+        start.elapsed()
+    );
 
+    eprintln!("[yt-dlp] waiting for output...");
     let output = timeout(YT_DLP_TIMEOUT, child.wait_with_output())
         .await
-        .map_err(|_| CadenceError::YtDlpTimeout)?
+        .map_err(|_| {
+            eprintln!("[yt-dlp] TIMED OUT after {:?}", start.elapsed());
+            CadenceError::YtDlpTimeout
+        })?
         .map_err(CadenceError::YtDlpIo)?;
+    eprintln!(
+        "[yt-dlp] finished in {:?}, status={}",
+        start.elapsed(),
+        output.status
+    );
 
     if !output.status.success() {
         return Err(CadenceError::YtDlpExecution {
