@@ -144,9 +144,18 @@ function App() {
               <p className="text-sm text-muted-foreground">Cargando...</p>
             )}
             {!isLoading && (
-              <p className="text-sm">
-                {playerState?.status}
-                {playerState?.current && ` — ${playerState.current.title}`}
+              <p className="flex items-center gap-2 text-sm">
+                <span
+                  className={`size-1.5 rounded-full ${
+                    playerState?.status === "Playing"
+                      ? "bg-playing"
+                      : "bg-muted-foreground"
+                  }`}
+                />
+                <span>
+                  {playerState?.status}
+                  {playerState?.current && ` — ${playerState.current.title}`}
+                </span>
               </p>
             )}
 
