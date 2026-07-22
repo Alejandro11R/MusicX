@@ -10,25 +10,32 @@ use crate::models::search_result::SearchResult;
 
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The subset of yt-dlp's `-j` JSON output this service cares about. The
-/// rest of the app never sees this shape directly, only `SearchResult`.
+/// The subset of yt-dlp's `--flat-playlist -j` output this service cares
+/// about. The rest of the app never sees this shape directly, only
+/// `SearchResult`. Flat mode skips per-video format/subtitle/storyboard
+/// extraction, which is the bulk of what a plain `-j` search pays for
+/// (measured: ~244KB/8.8s vs ~6KB/3.5s for the same 3-result query) — none
+/// of that extra data is needed until resolve_audio() is called for one
+/// specific track. The tradeoff: flat mode never includes `thumbnail`, so
+/// SearchResult::from builds it from YouTube's predictable per-ID CDN URL
+/// instead.
 #[derive(Debug, Deserialize)]
 struct YtDlpEntry {
     id: String,
     title: String,
     artist: Option<String>,
     duration: Option<f64>,
-    thumbnail: Option<String>,
 }
 
 impl From<YtDlpEntry> for SearchResult {
     fn from(entry: YtDlpEntry) -> Self {
+        let thumbnail_url = format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", entry.id);
         SearchResult {
             id: entry.id,
             title: entry.title,
             artist: entry.artist,
             duration_seconds: entry.duration.unwrap_or(0.0) as u64,
-            thumbnail_url: entry.thumbnail.unwrap_or_default(),
+            thumbnail_url,
         }
     }
 }
@@ -36,7 +43,7 @@ impl From<YtDlpEntry> for SearchResult {
 /// Searches YouTube for `query` and returns up to `limit` results.
 pub async fn search(query: &str, limit: u32) -> Result<Vec<SearchResult>, CadenceError> {
     let search_spec = format!("ytsearch{limit}:{query}");
-    let output = run_yt_dlp(&["-j", &search_spec]).await?;
+    let output = run_yt_dlp(&["--flat-playlist", "-j", &search_spec]).await?;
 
     // yt-dlp prints one JSON object per line for multi-result searches.
     output
@@ -100,6 +107,7 @@ async fn run_yt_dlp(args: &[&str]) -> Result<String, CadenceError> {
     // awaits it, becomes a zombie the moment it does exit on its own.
     let child = Command::new("yt-dlp")
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -150,7 +158,24 @@ mod tests {
         assert!(!first.id.is_empty());
         assert!(!first.title.is_empty());
         assert!(first.duration_seconds > 0);
-        assert!(!first.thumbnail_url.is_empty());
+        assert!(first.thumbnail_url.contains(&first.id));
+    }
+
+    // No network: flat-playlist mode never returns a thumbnail field, so
+    // this checks the construction logic directly rather than trusting
+    // yt-dlp to keep giving us a value it's known to omit.
+    #[test]
+    fn thumbnail_url_is_built_from_the_video_id() {
+        let entry = YtDlpEntry {
+            id: "abc123".to_string(),
+            title: "Some Track".to_string(),
+            artist: None,
+            duration: Some(120.0),
+        };
+
+        let result = SearchResult::from(entry);
+
+        assert_eq!(result.thumbnail_url, "https://i.ytimg.com/vi/abc123/hqdefault.jpg");
     }
 
     #[tokio::test]
