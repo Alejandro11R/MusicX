@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { Pause, Play, Search, Square, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,6 +34,10 @@ function formatDuration(totalSeconds: number): string {
 function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  // The query that produced `results`, so a stale list (query edited since
+  // the last search) never gets treated as "ready to play from".
+  const [resultsQuery, setResultsQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [playerState, setPlayerState] = useState<PlayerState | null>(null);
@@ -52,11 +61,32 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  async function handleSearch(e: FormEvent) {
-    e.preventDefault();
+  // "/" and Ctrl/Cmd+K refocus search from anywhere, like Raycast/Spotlight.
+  // "/" only fires when NOT already typing in the search box, so it can
+  // still be typed as a literal character in a query.
+  useEffect(() => {
+    function handleGlobalKeyDown(e: KeyboardEvent) {
+      const isSearchFocused = document.activeElement === searchInputRef.current;
+      if (e.key === "/" && !isSearchFocused) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    }
+    document.addEventListener("keydown", handleGlobalKeyDown);
+    return () => document.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
+
+  async function runSearch(q: string) {
     setError(null);
     try {
-      setResults(await search(query, 10));
+      const found = await search(q, 10);
+      setResults(found);
+      setResultsQuery(q);
+      setSelectedIndex(null);
     } catch (err) {
       setError(String(err));
     }
@@ -71,6 +101,36 @@ function App() {
       setError(String(err));
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  function handleSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const resultsAreFresh = results.length > 0 && query === resultsQuery;
+      if (resultsAreFresh) {
+        handlePlay(results[selectedIndex ?? 0]);
+      } else {
+        runSearch(query);
+      }
+    } else if (e.key === "ArrowDown") {
+      if (results.length === 0) return;
+      e.preventDefault();
+      setSelectedIndex((current) =>
+        current === null ? 0 : Math.min(current + 1, results.length - 1),
+      );
+    } else if (e.key === "ArrowUp") {
+      if (results.length === 0) return;
+      e.preventDefault();
+      setSelectedIndex((current) =>
+        current === null ? 0 : Math.max(current - 1, 0),
+      );
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setQuery("");
+      setResults([]);
+      setResultsQuery("");
+      setSelectedIndex(null);
     }
   }
 
@@ -114,40 +174,73 @@ function App() {
           <h1 className="text-lg font-semibold tracking-tight">Cadence</h1>
         </header>
 
-        <form onSubmit={handleSearch} className="flex gap-2">
+        <div className="flex gap-2">
           <Input
             ref={searchInputRef}
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
+            onKeyDown={handleSearchKeyDown}
             placeholder="Buscar..."
           />
-          <Button type="submit" size="icon" aria-label="Buscar">
+          <Button
+            type="button"
+            size="icon"
+            aria-label="Buscar"
+            onClick={() => runSearch(query)}
+          >
             <Search />
           </Button>
-        </form>
+        </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         {results.length > 0 && (
-          <ScrollArea className="min-h-0 flex-1">
-            <ol className="flex flex-col gap-1">
-              {results.map((track) => (
-                <li key={track.id}>
-                  <Button
-                    variant="ghost"
-                    className="h-auto w-full justify-between gap-3 px-3 py-2"
-                    onClick={() => handlePlay(track)}
-                    disabled={isLoading}
-                  >
-                    <span className="truncate text-sm">{track.title}</span>
-                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                      {formatDuration(track.duration_seconds)}
-                    </span>
-                  </Button>
-                </li>
-              ))}
-            </ol>
-          </ScrollArea>
+          <>
+            <ScrollArea className="min-h-0 flex-1">
+              <ol className="flex flex-col gap-1">
+                {results.map((track, index) => (
+                  <li key={track.id}>
+                    <Button
+                      variant="ghost"
+                      className={cn(
+                        "h-auto w-full justify-between gap-3 px-3 py-2",
+                        index === selectedIndex && "bg-muted text-foreground",
+                      )}
+                      onClick={() => handlePlay(track)}
+                      onMouseEnter={() => setSelectedIndex(index)}
+                      disabled={isLoading}
+                    >
+                      <span className="truncate text-sm">{track.title}</span>
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {formatDuration(track.duration_seconds)}
+                      </span>
+                    </Button>
+                  </li>
+                ))}
+              </ol>
+            </ScrollArea>
+
+            <p className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <kbd className="rounded border border-border px-1 py-0.5 font-sans">
+                  ↑↓
+                </kbd>
+                Navegar
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="rounded border border-border px-1 py-0.5 font-sans">
+                  Enter
+                </kbd>
+                Reproducir
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="rounded border border-border px-1 py-0.5 font-sans">
+                  Esc
+                </kbd>
+                Limpiar
+              </span>
+            </p>
+          </>
         )}
 
         {(isLoading || playerState?.current) && (
