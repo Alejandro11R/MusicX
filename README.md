@@ -25,3 +25,9 @@ No library, no playlists, no recommendations. Just search → listen → focus.
 npm install
 npm run tauri dev
 ```
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why things are built the
+way they are — mpv/yt-dlp choices, the search/resolve_audio split, and a
+couple of real bugs worth not repeating.
