@@ -1,4 +1,10 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { Pause, Play, Search, Square } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Slider } from "@/components/ui/slider";
 import {
   search,
   play,
@@ -83,9 +89,9 @@ function App() {
     }
   }
 
-  async function handleVolumeChange(e: ChangeEvent<HTMLInputElement>) {
+  async function handleVolumeChange(level: number) {
     try {
-      await setVolume(Number(e.currentTarget.value));
+      await setVolume(level);
     } catch (err) {
       setError(String(err));
     }
@@ -94,57 +100,99 @@ function App() {
   const volume = playerState?.volume ?? 100;
 
   return (
-    <main>
-      <h1>Cadence</h1>
+    <div className="flex h-screen w-screen flex-col overflow-hidden">
+      <Card className="flex h-full flex-col gap-4 rounded-none px-4">
+        <header>
+          <h1 className="text-lg font-semibold">Cadence</h1>
+        </header>
 
-      <form onSubmit={handleSearch}>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.currentTarget.value)}
-          placeholder="Buscar..."
-        />
-        <button type="submit">Buscar</button>
-      </form>
+        <form onSubmit={handleSearch} className="flex gap-2">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+            placeholder="Buscar..."
+          />
+          <Button type="submit" size="icon" aria-label="Buscar">
+            <Search />
+          </Button>
+        </form>
 
-      {error && <p>Error: {error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
-      <ol>
-        {results.map((track) => (
-          <li key={track.id}>
-            <button onClick={() => handlePlay(track)} disabled={isLoading}>
-              {track.title}
-            </button>
-          </li>
-        ))}
-      </ol>
-
-      <section>
-        <h2>Reproduciendo</h2>
-        {isLoading && <p>Cargando...</p>}
-        {!isLoading && (
-          <p>
-            Estado: {playerState?.status ?? "?"}
-            {playerState?.current && ` — ${playerState.current.title}`}
-          </p>
+        {results.length > 0 && (
+          <ScrollArea className="min-h-0 flex-1">
+            <ol className="flex flex-col gap-1">
+              {results.map((track) => (
+                <li key={track.id}>
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start"
+                    onClick={() => handlePlay(track)}
+                    disabled={isLoading}
+                  >
+                    {track.title}
+                  </Button>
+                </li>
+              ))}
+            </ol>
+          </ScrollArea>
         )}
 
-        <button onClick={handlePause}>Pause</button>
-        <button onClick={handleResume}>Resume</button>
-        <button onClick={handleStop}>Stop</button>
+        {(isLoading || playerState?.current) && (
+          <div className="flex flex-col gap-3 border-t border-border pt-4 pb-4">
+            {isLoading && (
+              <p className="text-sm text-muted-foreground">Cargando...</p>
+            )}
+            {!isLoading && (
+              <p className="text-sm">
+                {playerState?.status}
+                {playerState?.current && ` — ${playerState.current.title}`}
+              </p>
+            )}
 
-        <div>
-          <label htmlFor="volume">Volumen: {volume}</label>
-          <input
-            id="volume"
-            type="range"
-            min={0}
-            max={100}
-            value={volume}
-            onChange={handleVolumeChange}
-          />
-        </div>
-      </section>
-    </main>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handlePause}
+                aria-label="Pause"
+              >
+                <Pause />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleResume}
+                aria-label="Resume"
+              >
+                <Play />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleStop}
+                aria-label="Stop"
+              >
+                <Square />
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Vol</span>
+              <Slider
+                value={[volume]}
+                max={100}
+                step={1}
+                onValueChange={([level]) => handleVolumeChange(level)}
+              />
+              <span className="w-8 text-right text-xs text-muted-foreground">
+                {volume}
+              </span>
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 
