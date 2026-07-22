@@ -79,6 +79,12 @@ impl MpvPlayer {
         self.set_property("pause", json!(false)).await
     }
 
+    /// Halts playback and unloads the current file, returning mpv to idle.
+    pub async fn stop(&mut self) -> Result<(), CadenceError> {
+        self.request(json!({ "command": ["stop"] })).await?;
+        Ok(())
+    }
+
     pub async fn set_volume(&mut self, level: f64) -> Result<(), CadenceError> {
         self.set_property("volume", json!(level)).await
     }
@@ -236,5 +242,14 @@ mod tests {
             .load("https://example.invalid/does-not-exist.mp3")
             .await
             .expect("mpv should acknowledge the loadfile command");
+    }
+
+    #[tokio::test]
+    async fn stop_is_accepted_by_mpv() {
+        let mut player = MpvPlayer::connect(unique_socket_path())
+            .await
+            .expect("connect to mpv");
+
+        player.stop().await.expect("mpv should acknowledge stop");
     }
 }
