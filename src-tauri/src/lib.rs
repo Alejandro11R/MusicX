@@ -2,7 +2,7 @@
 
 mod commands;
 mod errors;
-mod models;
+pub mod models;
 mod services;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
