@@ -1,0 +1,228 @@
+/*
+ * Cadence — Liquid Glass extension kit
+ * Añade profundidad, brillo especular y malla animada
+ * sobre la base ya existente en src/index.css.
+ *
+ * Importar en src/main.tsx o en src/index.css:
+ *   import "@/styles/liquid-glass.css";
+ */
+
+/* ===== Tokens de vidrio ===== */
+@layer base {
+  :root {
+    --glass-bg: rgba(255, 255, 255, 0.035);
+    --glass-border: rgba(255, 255, 255, 0.10);
+    --glass-border-bright: rgba(255, 255, 255, 0.22);
+    --glass-border-dim: rgba(255, 255, 255, 0.04);
+    --glass-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.75),
+      0 0 0 1px rgba(255, 255, 255, 0.06);
+    --glass-inset: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.25),
+      inset 0 -1px 0 0 rgba(0, 0, 0, 0.35);
+    --specular: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.55) 0%,
+      rgba(255, 255, 255, 0) 40%,
+      rgba(255, 255, 255, 0.15) 100%
+    );
+  }
+}
+
+/* ===== Utilidades de vidrio ===== */
+@layer utilities {
+  /* Panel de vidrio con doble borde y brillo superior */
+  .glass-panel {
+    position: relative;
+    background: var(--glass-bg);
+    backdrop-filter: blur(32px) saturate(190%);
+    -webkit-backdrop-filter: blur(32px) saturate(190%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow), var(--glass-inset);
+  }
+
+  /* Brillo especular en el borde superior (vidrio real) */
+  .glass-panel::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    mask: linear-gradient(#000 0%, #000 70%, transparent 100%) alpha;
+    -webkit-mask: linear-gradient(#000 0%, #000 70%, transparent 100%) alpha;
+    background: var(--specular);
+    opacity: 0.55;
+  }
+
+  .glass-panel[data-pressed="true"] {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: var(--glass-border-bright);
+    box-shadow: var(--glass-shadow), inset 0 1px 0 0 rgba(255, 255, 255, 0.35);
+    transform: translateY(1px);
+  }
+
+  /* Pílula de vidrio más ligera (etiquetas, estado) */
+  .glass-pill {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border-dim);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+  }
+
+  /* Fondo malla animada (depth) */
+  .mesh-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    background: radial-gradient(
+      120% 120% at 50% 0%,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(20, 26, 40, 0.85) 40%,
+      rgba(8, 11, 20, 0.95) 100%
+    );
+  }
+
+  .mesh-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(64px);
+    opacity: 0.35;
+    animation: mesh-drift 14s ease-in-out infinite alternate;
+  }
+
+  @keyframes mesh-drift {
+    0% {
+      transform: translate3d(-10%, -8%, 0) scale(1);
+    }
+    100% {
+      transform: translate3d(12%, 6%, 0) scale(1.15);
+    }
+  }
+
+  /* Glow de reproducción (ahora con anillo interior) */
+  .glass-glow {
+    box-shadow: 0 0 28px -4px rgba(45, 212, 191, 0.45),
+      0 0 10px -2px rgba(45, 212, 191, 0.25),
+      inset 0 1px 1px 0 rgba(255, 255, 255, 0.25);
+  }
+
+  /* Slider de vidrio */
+  .glass-slider-track {
+    position: relative;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 9999px;
+    overflow: hidden;
+    box-shadow: inset 0 1px 1px 0 rgba(0, 0, 0, 0.4);
+  }
+
+  .glass-slider-range {
+    height: 100%;
+    background: linear-gradient(90deg, #2dd4bf, #10b981);
+    border-radius: 9999px;
+    filter: blur(1px);
+    box-shadow: 0 0 14px -4px rgba(45, 212, 191, 0.55);
+    transition: width 120ms ease-out;
+  }
+
+  .glass-slider-thumb {
+    position: relative;
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    background: #fff;
+    border: 1.5px solid rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.35),
+      0 0 14px -2px rgba(45, 212, 191, 0.55);
+    transition: transform 100ms ease, box-shadow 100ms ease;
+    cursor: pointer;
+  }
+
+  .glass-slider-thumb:active,
+  .glass-slider-thumb[data-active="true"] {
+    transform: scale(1.25);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.5),
+      0 0 22px -2px rgba(45, 212, 191, 0.7);
+  }
+
+  /* Botón de vidrio (base para GlassButton) */
+  .glass-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: #f8fafc;
+    box-shadow: var(--glass-inset);
+    transition: all 120ms ease;
+    outline: none;
+  }
+
+  .glass-btn:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: var(--glass-border-bright);
+    box-shadow: var(--glass-inset), 0 0 16px -6px rgba(45, 212, 191, 0.3);
+  }
+
+  .glass-btn:active {
+    background: rgba(255, 255, 255, 0.02);
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.4);
+  }
+
+  .glass-btn:focus-visible {
+    border-color: #2dd4bf;
+    box-shadow: var(--glass-inset), 0 0 0 3px rgba(45, 212, 191, 0.35);
+  }
+
+  /* Botón de acción principal (play/pause) con anillo de luz */
+  .glass-btn-primary {
+    background: linear-gradient(135deg, #2dd4bf, #0ea5a5);
+    color: #022c22;
+    box-shadow: 0 0 20px -4px rgba(45, 212, 191, 0.55),
+      var(--glass-inset);
+  }
+
+  .glass-btn-primary:hover {
+    box-shadow: 0 0 28px -4px rgba(45, 212, 191, 0.7),
+      var(--glass-inset);
+    transform: translateY(-1px);
+  }
+
+  .glass-btn-primary:active {
+    transform: scale(0.96);
+  }
+
+  /* Anillo de luz decorativo (now-playing / estado) */
+  .specular-ring {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .specular-ring::after {
+    content: "";
+    position: absolute;
+    inset: -25%;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 50%;
+    animation: specular-spin 3s linear infinite;
+    opacity: 0.6;
+  }
+
+  @keyframes specular-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+}
+
+/* ===== Reducido de movimiento (accesibilidad) ===== */
+@media (prefers-reduced-motion: reduce) {
+  .mesh-blob,
+  .specular-ring::after {
+    animation: none !important;
+  }
+  .glass-slider-range {
+    transition: none !important;
+  }
+}

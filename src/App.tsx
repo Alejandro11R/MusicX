@@ -21,12 +21,13 @@ import {
   X,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
+import { GlassButton, MeshBackground, GlassPanel, SpecularRing } from "@/components/ui/liquid-glass";
 import { cn } from "@/lib/utils";
 import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
+import { extractDominantColor } from "@/lib/album-color";
 import {
   search,
   play,
@@ -234,6 +235,16 @@ const NowPlaying = React.memo(function NowPlaying({
     dragPosition ?? playerState?.position_seconds ?? 0,
     duration,
   );
+  const [albumColor, setAlbumColor] = useState<string | null>(null);
+
+  useEffect(() => {
+    const url = current?.thumbnail_url;
+    if (!url) {
+      setAlbumColor(null);
+      return;
+    }
+    extractDominantColor(url).then(setAlbumColor);
+  }, [current?.thumbnail_url]);
 
   return (
     <div className="liquid-card mt-auto flex flex-col gap-3 rounded-2xl p-3 border border-white/10 shadow-xl" role="region" aria-label="Reproductor">
@@ -246,28 +257,41 @@ const NowPlaying = React.memo(function NowPlaying({
 
       {current && (
         <div className="flex items-center gap-3">
-          <div
-            className={cn(
-              "size-12 shrink-0 overflow-hidden rounded-xl bg-white/10 border border-white/15 transition-all duration-300",
-              isPlaying && "shadow-[0_4px_20px_-2px_rgba(45,212,191,0.35)]",
-            )}
-          >
-            <img
-              src={current.thumbnail_url}
-              alt=""
-              className="size-full object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLElement).style.display = "none";
+          <SpecularRing className="size-12 shrink-0">
+            <div
+              className={cn(
+                "overflow-hidden rounded-xl bg-white/10 transition-all duration-300",
+                isPlaying && "shadow-[0_4px_20px_-2px_rgba(45,212,191,0.35)]",
+              )}
+              style={{
+                borderColor: albumColor ?? undefined,
+                borderWidth: albumColor ? "1px" : undefined,
+                borderStyle: albumColor ? "solid" : undefined,
               }}
-            />
-          </div>
+            >
+              <img
+                src={current.thumbnail_url}
+                alt=""
+                className="size-full object-cover"
+                onError={(e) => {
+                  (e.currentTarget as HTMLElement).style.display = "none";
+                }}
+              />
+            </div>
+          </SpecularRing>
           <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
             <div className="flex items-center gap-1.5">
               <span
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full transition-all",
-                  isPlaying ? "bg-teal-400 shadow-[0_0_6px_#2dd4bf] animate-pulse" : "bg-white/30",
-                )}
+                className="size-1.5 shrink-0 rounded-full transition-all"
+                style={{
+                  backgroundColor: isPlaying
+                    ? (albumColor ?? "#2dd4bf")
+                    : undefined,
+                  boxShadow: isPlaying
+                    ? `0 0 6px ${albumColor ?? "#2dd4bf"}`
+                    : undefined,
+                  animation: isPlaying ? "pulse 2s infinite" : undefined,
+                }}
               />
               <p className="truncate text-xs font-semibold text-white/95">
                 {current.title}
@@ -292,6 +316,7 @@ const NowPlaying = React.memo(function NowPlaying({
             value={[position]}
             max={Math.max(duration, 1)}
             step={1}
+            variant="glass"
             onValueChange={([value]) => onSeekPreview(value)}
             onValueCommit={([value]) => onSeekCommit(value)}
             aria-label="Posición de reproducción"
@@ -305,42 +330,41 @@ const NowPlaying = React.memo(function NowPlaying({
 
       {/* Controles Principales */}
       <div className="flex items-center justify-center gap-3 pt-0.5">
-        <Button
+        <GlassButton
           variant="ghost"
-          size="icon"
-          className={cn(
-            "size-8 rounded-full border transition-all",
-            isLooping
-              ? "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]"
-              : "bg-white/[0.04] text-white/60 border-white/5 hover:bg-white/[0.1] hover:text-white",
-          )}
-          onClick={onToggleLoop}
+          size="md"
           aria-label={isLooping ? "Desactivar bucle (L)" : "Activar bucle (L)"}
           title={isLooping ? "Bucle activo (L)" : "Bucle inactivo (L)"}
+          onClick={onToggleLoop}
+          className={cn(
+            isLooping
+              ? "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]"
+              : "border-white/5 hover:bg-white/[0.1] hover:text-white",
+          )}
         >
           <Repeat className={cn("size-3.5", isLooping && "stroke-[2.5]")} />
-        </Button>
+        </GlassButton>
 
-        <Button
-          size="icon"
-          className="size-10 rounded-full bg-gradient-to-br from-teal-400 to-emerald-500 text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.45)] hover:shadow-[0_0_24px_rgba(45,212,191,0.65)] hover:scale-105 active:scale-95 transition-all"
-          onClick={onTogglePlayback}
+        <GlassButton
+          variant="primary"
+          size="lg"
           aria-label={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
           title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+          onClick={onTogglePlayback}
         >
           {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 ml-0.5 fill-current" />}
-        </Button>
+        </GlassButton>
 
-        <Button
+        <GlassButton
           variant="ghost"
-          size="icon"
-          className="size-8 rounded-full bg-white/[0.04] border border-white/5 text-white/60 hover:bg-white/[0.1] hover:text-white transition-all"
-          onClick={onStop}
+          size="md"
           aria-label="Detener"
           title="Detener"
+          onClick={onStop}
+          className="border-white/5 hover:bg-white/[0.1] hover:text-white"
         >
           <Square className="size-3.5 fill-current" />
-        </Button>
+        </GlassButton>
       </div>
 
       {/* Control de Volumen Líquido */}
@@ -363,6 +387,7 @@ const NowPlaying = React.memo(function NowPlaying({
           value={[volume]}
           max={100}
           step={1}
+          variant="glass"
           onValueChange={([level]) => onVolumePreview(level)}
           onValueCommit={([level]) => onVolumeCommit(level)}
           aria-label="Volumen"
@@ -756,7 +781,8 @@ function App() {
 
   return (
     <main className="flex h-screen w-screen p-2.5">
-      <div className="liquid-glass-window relative flex h-full w-full flex-col gap-3 rounded-[24px] p-4 overflow-hidden">
+      <MeshBackground playing={isPlaying} />
+      <GlassPanel pressed={false} className="relative flex h-full w-full flex-col gap-3 rounded-[24px] p-4 overflow-hidden">
         {/* Barra superior con arrastre nativo y controles Apple Glass */}
         <header
           data-tauri-drag-region
@@ -784,22 +810,12 @@ function App() {
           </div>
 
           <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => getCurrentWindow().minimize()}
-              aria-label="Minimizar"
-              className="flex size-6 items-center justify-center rounded-full bg-white/[0.08] text-white/60 hover:bg-white/[0.15] hover:text-white transition-all"
-            >
+            <GlassButton variant="ghost" size="sm" aria-label="Minimizar" onClick={() => getCurrentWindow().minimize()}>
               <Minus className="size-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => getCurrentWindow().hide()}
-              aria-label="Ocultar"
-              className="flex size-6 items-center justify-center rounded-full bg-rose-500/20 text-rose-300 hover:bg-rose-500/35 hover:text-white transition-all"
-            >
+            </GlassButton>
+            <GlassButton variant="ghost" size="sm" aria-label="Ocultar" onClick={() => getCurrentWindow().hide()}>
               <X className="size-3" />
-            </button>
+            </GlassButton>
           </div>
         </header>
 
@@ -833,10 +849,9 @@ function App() {
               </button>
             )}
           </div>
-          <Button
+          <GlassButton
             type="button"
-            size="icon"
-            className="h-10 w-10 shrink-0 rounded-xl bg-white/[0.08] hover:bg-white/[0.15] border border-white/10 shadow-sm transition-all"
+            size="md"
             aria-label="Buscar"
             onClick={() => runSearch(query)}
             disabled={isSearching}
@@ -846,7 +861,7 @@ function App() {
             ) : (
               <Search className="size-4 text-white/80" />
             )}
-          </Button>
+          </GlassButton>
         </div>
 
         {error && (
@@ -1015,7 +1030,7 @@ function App() {
             volume={volume}
           />
         )}
-      </div>
+      </GlassPanel>
     </main>
   );
 }
