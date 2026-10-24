@@ -8,7 +8,7 @@ use tokio::time::timeout;
 use crate::errors::CadenceError;
 use crate::models::search_result::SearchResult;
 
-const YT_DLP_TIMEOUT: Duration = Duration::from_secs(15);
+const YT_DLP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The subset of yt-dlp's `--flat-playlist -j` output this service cares
 /// about. The rest of the app never sees this shape directly, only

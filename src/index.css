@@ -6,10 +6,8 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Cadence is dark-only for now (docs/UI.md: "an elegant dark palette"),
- * so :root carries the dark values directly instead of gating them behind
- * a .dark class nothing toggles yet. Sidebar/chart tokens from the shadcn
- * preset are dropped rather than left unused — Cadence has neither.
+ * Cadence — Liquid Glass (iOS / visionOS glassmorphism philosophy)
+ * Translucent surfaces, rich specular reflections, frosted blur, and glowing accents.
  */
 @theme inline {
     --font-heading: var(--font-sans);
@@ -43,39 +41,81 @@
 }
 
 :root {
-    /* Glass theme: cool, near-black, teal accent — see docs/UI.md. */
-    --background: #0a0c10;
-    --foreground: #e8ebf1;
-    --card: #12151c;
-    --card-foreground: #e8ebf1;
-    --popover: #12151c;
-    --popover-foreground: #e8ebf1;
+    --background: transparent;
+    --foreground: #f8fafc;
+    --card: rgba(16, 20, 30, 0.76);
+    --card-foreground: #f8fafc;
+    --popover: rgba(16, 20, 30, 0.85);
+    --popover-foreground: #f8fafc;
     --primary: #2dd4bf;
-    --primary-foreground: #06201c;
-    --secondary: #1a1e27;
-    --secondary-foreground: #e8ebf1;
-    --muted: #171a21;
-    --muted-foreground: #8892a4;
-    --accent: #1a1e27;
-    --accent-foreground: #e8ebf1;
-    --destructive: #f2555f;
-    --border: oklch(1 0 0 / 9%);
-    --input: oklch(1 0 0 / 9%);
-    --ring: oklch(0.75 0.12 185 / 50%);
-    --radius: 0.75rem;
-    /* Marks the currently-playing track/control — distinct from primary
-       (the search action) so "what's making sound" reads at a glance. */
-    --playing: #34d399;
+    --primary-foreground: #022c22;
+    --secondary: rgba(255, 255, 255, 0.08);
+    --secondary-foreground: #f8fafc;
+    --muted: rgba(255, 255, 255, 0.05);
+    --muted-foreground: #94a3b8;
+    --accent: rgba(255, 255, 255, 0.1);
+    --accent-foreground: #f8fafc;
+    --destructive: #fb7185;
+    --border: rgba(255, 255, 255, 0.12);
+    --input: rgba(255, 255, 255, 0.08);
+    --ring: rgba(45, 212, 191, 0.4);
+    --radius: 1rem;
+    --playing: #2dd4bf;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
-  body {
-    @apply bg-background text-foreground;
-    }
-  html {
-    @apply font-sans;
-    }
+  }
+  html, body {
+    background: transparent !important;
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    @apply font-sans text-foreground;
+  }
+}
+
+@layer utilities {
+  .liquid-glass-window {
+    background: radial-gradient(
+      120% 120% at 50% 0%,
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(20, 26, 40, 0.78) 45%,
+      rgba(10, 13, 22, 0.88) 100%
+    );
+    backdrop-filter: blur(48px) saturate(210%);
+    -webkit-backdrop-filter: blur(48px) saturate(210%);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 
+      inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.35),
+      inset 0 -1px 1px 0 rgba(0, 0, 0, 0.4),
+      0 24px 64px -12px rgba(0, 0, 0, 0.85);
+  }
+
+  .liquid-card {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+  }
+
+  .liquid-pill {
+    background: rgba(255, 255, 255, 0.07);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
+  }
+
+  .liquid-glow-playing {
+    box-shadow: 
+      0 0 24px -2px rgba(45, 212, 191, 0.35),
+      inset 0 1px 1px 0 rgba(255, 255, 255, 0.25);
+  }
 }

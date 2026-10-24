@@ -13,11 +13,12 @@
     "windows": [
       {
         "title": "Cadence",
-        "width": 420,
-        "height": 640,
+        "width": 430,
+        "height": 660,
         "minWidth": 360,
-        "minHeight": 420,
-        "center": true
+        "minHeight": 440,
+        "center": true,
+        "transparent": true
       }
     ],
     "security": {

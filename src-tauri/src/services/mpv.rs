@@ -21,6 +21,7 @@ pub struct MpvStatus {
     pub volume: f64,
     pub position_seconds: Option<f64>,
     pub duration_seconds: Option<f64>,
+    pub looping: bool,
 }
 
 /// Owns an mpv child process and its IPC socket connection. All mpv
@@ -36,11 +37,22 @@ impl MpvPlayer {
     pub async fn connect(socket_path: PathBuf) -> Result<Self, CadenceError> {
         let _ = std::fs::remove_file(&socket_path);
 
-        let process = Command::new("mpv")
-            .arg("--idle=yes")
+        let mut cmd = Command::new("mpv");
+        cmd.arg("--idle=yes")
             .arg("--no-video")
             .arg("--really-quiet")
-            .arg(format!("--input-ipc-server={}", socket_path.display()))
+            .arg("--af=dynaudnorm")
+            .arg(format!("--input-ipc-server={}", socket_path.display()));
+
+        if !cfg!(test) {
+            if std::path::Path::new("/usr/lib/mpv-mpris/mpris.so").exists() {
+                cmd.arg("--script=/usr/lib/mpv-mpris/mpris.so");
+            } else if std::path::Path::new("/etc/mpv/scripts/mpris.so").exists() {
+                cmd.arg("--script=/etc/mpv/scripts/mpris.so");
+            }
+        }
+
+        let process = cmd
             .kill_on_drop(true)
             .spawn()
             .map_err(CadenceError::MpvSpawn)?;
@@ -94,6 +106,12 @@ impl MpvPlayer {
         self.set_property("time-pos", json!(position_seconds)).await
     }
 
+    /// Sets whether the current track loops indefinitely.
+    pub async fn set_loop(&mut self, enabled: bool) -> Result<(), CadenceError> {
+        let value = if enabled { "inf" } else { "no" };
+        self.set_property("loop-file", json!(value)).await
+    }
+
     /// Forcefully terminates the mpv process. `kill_on_drop` alone is not
     /// enough for app shutdown: Tauri's normal exit path does not
     /// guarantee `Drop` runs (e.g. `std::process::exit`), so callers must
@@ -111,12 +129,19 @@ impl MpvPlayer {
         let volume = self.get_property("volume").await?.as_f64().unwrap_or(0.0);
         let position_seconds = self.get_optional_property_f64("time-pos").await?;
         let duration_seconds = self.get_optional_property_f64("duration").await?;
+        let loop_prop = self.get_property("loop-file").await.unwrap_or(Value::Null);
+        let looping = match &loop_prop {
+            Value::String(s) => s == "inf",
+            Value::Bool(b) => *b,
+            _ => false,
+        };
 
         Ok(MpvStatus {
             paused,
             volume,
             position_seconds,
             duration_seconds,
+            looping,
         })
     }
 

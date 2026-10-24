@@ -21,6 +21,7 @@ export interface PlayerState {
   position_seconds: number;
   duration_seconds: number;
   volume: number;
+  looping: boolean;
 }
 
 export interface HealthStatus {
@@ -54,6 +55,10 @@ export function setVolume(level: number): Promise<void> {
 
 export function seek(positionSeconds: number): Promise<void> {
   return invoke("seek", { positionSeconds });
+}
+
+export function setLoop(enabled: boolean): Promise<void> {
+  return invoke("set_loop", { enabled });
 }
 
 export function getState(): Promise<PlayerState> {

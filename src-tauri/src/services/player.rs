@@ -51,6 +51,10 @@ impl PlayerService {
         self.mpv.seek(position_seconds).await
     }
 
+    pub async fn set_loop(&mut self, enabled: bool) -> Result<(), CadenceError> {
+        self.mpv.set_loop(enabled).await
+    }
+
     /// Terminates the underlying mpv process. Call this on app shutdown —
     /// see `MpvPlayer::kill` for why `Drop` alone isn't sufficient.
     pub async fn shutdown(&mut self) {
@@ -72,6 +76,7 @@ impl PlayerService {
             position_seconds: mpv_status.position_seconds.unwrap_or(0.0),
             duration_seconds: mpv_status.duration_seconds.unwrap_or(0.0),
             volume: mpv_status.volume,
+            looping: mpv_status.looping,
         })
     }
 }

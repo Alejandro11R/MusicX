@@ -17,6 +17,7 @@ pub struct PlayerState {
     pub position_seconds: f64,
     pub duration_seconds: f64,
     pub volume: f64,
+    pub looping: bool,
 }
 
 #[cfg(test)]
@@ -42,6 +43,7 @@ mod tests {
             position_seconds: 42.5,
             duration_seconds: 187.0,
             volume: 60.0,
+            looping: true,
         };
 
         let json = serde_json::to_string(&state).expect("serialize PlayerState");
@@ -58,6 +60,7 @@ mod tests {
             position_seconds: 0.0,
             duration_seconds: 0.0,
             volume: 100.0,
+            looping: false,
         };
 
         let json = serde_json::to_string(&state).expect("serialize PlayerState");

@@ -41,6 +41,55 @@ pub fn run() {
             app.manage(AppState {
                 player: Arc::new(Mutex::new(player)),
             });
+
+            if let Some(icon) = app.default_window_icon().cloned() {
+                let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Salir de Cadence", true, None::<&str>)?;
+                let toggle_i = tauri::menu::MenuItem::with_id(app, "toggle", "Mostrar / Ocultar", true, None::<&str>)?;
+                let menu = tauri::menu::Menu::with_items(app, &[&toggle_i, &quit_i])?;
+
+                let _tray = tauri::tray::TrayIconBuilder::new()
+                    .icon(icon)
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| {
+                        match event.id.as_ref() {
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            "toggle" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    if window.is_visible().unwrap_or(false) {
+                                        let _ = window.hide();
+                                    } else {
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -51,6 +100,7 @@ pub fn run() {
             commands::playback::stop,
             commands::playback::set_volume,
             commands::playback::seek,
+            commands::playback::set_loop,
             commands::player::state,
             commands::player::health,
             commands::app::quit,

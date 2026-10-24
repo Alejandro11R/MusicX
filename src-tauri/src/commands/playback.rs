@@ -42,3 +42,11 @@ pub async fn seek(
 ) -> Result<(), CadenceError> {
     app_state.player.lock().await.seek(position_seconds).await
 }
+
+#[tauri::command]
+pub async fn set_loop(
+    app_state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), CadenceError> {
+    app_state.player.lock().await.set_loop(enabled).await
+}
