@@ -1,24 +1,24 @@
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::errors::CadenceError;
 use crate::models::search_result::SearchResult;
 
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_CONCURRENT_YT_DLP: usize = 2;
+const CACHE_TTL: Duration = Duration::from_secs(30 * 60); // 30 minutos
+const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
+const CIRCUIT_BREAKER_RESET: Duration = Duration::from_secs(60);
 
-/// The subset of yt-dlp's `--flat-playlist -j` output this service cares
-/// about. The rest of the app never sees this shape directly, only
-/// `SearchResult`. Flat mode skips per-video format/subtitle/storyboard
-/// extraction, which is the bulk of what a plain `-j` search pays for
-/// (measured: ~244KB/8.8s vs ~6KB/3.5s for the same 3-result query) — none
-/// of that extra data is needed until resolve_audio() is called for one
-/// specific track. The tradeoff: flat mode never includes `thumbnail`, so
-/// SearchResult::from builds it from YouTube's predictable per-ID CDN URL
-/// instead.
+/// Entrada de yt-dlp en modo flat-playlist.
 #[derive(Debug, Deserialize)]
 struct YtDlpEntry {
     id: String,
@@ -41,117 +41,374 @@ impl From<YtDlpEntry> for SearchResult {
     }
 }
 
-/// Searches YouTube for `query` and returns up to `limit` results.
-pub async fn search(query: &str, limit: u32) -> Result<Vec<SearchResult>, CadenceError> {
-    let search_spec = format!("ytsearch{limit}:{query}");
-    let output = run_yt_dlp(&["--flat-playlist", "-j", &search_spec]).await?;
+/// Margen de seguridad: dejamos de usar una URL firmada un minuto antes de
+/// que YouTube la considere expirada, para evitar 403 a mitad de canción.
+const URL_EXPIRY_SAFETY_MARGIN: Duration = Duration::from_secs(60);
 
-    // yt-dlp prints one JSON object per line for multi-result searches.
-    let entries = output
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<YtDlpEntry>(line).map_err(CadenceError::YtDlpParse))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(filter_playable(entries))
-}
-
-// A search can match a channel/playlist as well as videos (ie_key
-// "YoutubeTab" instead of "Youtube") — not a track resolve_audio() can
-// ever play, so it's dropped here rather than shown as a dead result.
-// This can leave fewer than `limit` results; that's preferable to a
-// result the user can click but nothing will play.
-fn filter_playable(entries: Vec<YtDlpEntry>) -> Vec<SearchResult> {
-    entries
+/// Calcula el TTL de una URL a partir de su parámetro `expire` (epoch secs).
+///
+/// Las URLs de googlevideo vienen firmadas y caducan (normalmente ~6h). Un TTL
+/// fijo de 30 min puede devolver una URL ya muerta si la app queda abierta
+/// mucho tiempo; y al revés, cachear más allá del `expire` garantiza un 403.
+/// Si la URL no trae `expire`, caemos al TTL conservador de siempre.
+fn ttl_from_url(url: &str, now_unix_secs: u64) -> Duration {
+    let expire = url
+        .split_once('?')
+        .map(|(_, query)| query)
         .into_iter()
-        .filter(|entry| entry.ie_key == "Youtube")
-        .map(SearchResult::from)
-        .collect()
-}
+        .flat_map(|query| query.split('&'))
+        .find_map(|pair| pair.strip_prefix("expire="))
+        .and_then(|value| value.parse::<u64>().ok());
 
-/// Resolves a video ID to a direct, playable audio-only stream URL.
-/// The URL is short-lived (YouTube signs it with an expiry), so callers
-/// should not persist it — resolve again when the track is actually played.
-pub async fn resolve_audio(video_id: &str) -> Result<String, CadenceError> {
-    let watch_url = format!("https://www.youtube.com/watch?v={video_id}");
-    let output = run_yt_dlp(&["-f", "bestaudio", "-g", &watch_url])
-        .await
-        .map_err(|err| annotate_execution_failure(err, video_id))?;
-
-    let url = output.lines().next().unwrap_or("").trim();
-    if url.is_empty() {
-        return Err(CadenceError::YtDlpNoAudioStream {
-            video_id: video_id.to_string(),
-        });
-    }
-
-    Ok(url.to_string())
-}
-
-/// yt-dlp's raw stderr isn't fit to show a user, but it's exactly what's
-/// needed to reproduce a specific failing video from the terminal — log it
-/// here rather than on the error that reaches the frontend, and name the
-/// one failure mode ("Sign in to confirm...", age/region restrictions)
-/// common enough to give its own error variant and message.
-fn annotate_execution_failure(err: CadenceError, video_id: &str) -> CadenceError {
-    let CadenceError::YtDlpExecution { message } = &err else {
-        return err;
-    };
-
-    eprintln!("yt-dlp failed to resolve video {video_id}: {message}");
-
-    if message.to_lowercase().contains("sign in") {
-        CadenceError::YtDlpAuthRequired {
-            video_id: video_id.to_string(),
+    match expire {
+        Some(expire) => {
+            let deadline = expire.saturating_sub(URL_EXPIRY_SAFETY_MARGIN.as_secs());
+            if deadline <= now_unix_secs {
+                Duration::ZERO
+            } else {
+                Duration::from_secs(deadline - now_unix_secs).min(CACHE_TTL)
+            }
         }
-    } else {
-        err
+        None => CACHE_TTL,
     }
 }
 
-async fn run_yt_dlp(args: &[&str]) -> Result<String, CadenceError> {
-    let start = Instant::now();
-    eprintln!("[yt-dlp] launching: yt-dlp {}", args.join(" "));
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
 
-    // Without kill_on_drop, a timeout below drops `child.wait_with_output()`
-    // (which owns the Child) without killing the process: yt-dlp keeps
-    // running in the background and, having no reaper left once nothing
-    // awaits it, becomes a zombie the moment it does exit on its own.
-    let child = Command::new("yt-dlp")
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(CadenceError::YtDlpSpawn)?;
-    eprintln!(
-        "[yt-dlp] spawned pid={:?} ({:?} since launch)",
-        child.id(),
-        start.elapsed()
-    );
+/// Entrada de cache para URLs de audio resueltas.
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    url: String,
+    expires_at: Instant,
+}
 
-    eprintln!("[yt-dlp] waiting for output...");
-    let output = timeout(YT_DLP_TIMEOUT, child.wait_with_output())
-        .await
-        .map_err(|_| {
-            eprintln!("[yt-dlp] TIMED OUT after {:?}", start.elapsed());
-            CadenceError::YtDlpTimeout
-        })?
-        .map_err(CadenceError::YtDlpIo)?;
-    eprintln!(
-        "[yt-dlp] finished in {:?}, status={}",
-        start.elapsed(),
-        output.status
-    );
-
-    if !output.status.success() {
-        return Err(CadenceError::YtDlpExecution {
-            message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
+impl CacheEntry {
+    fn new(url: String) -> Self {
+        let expires_at = Instant::now() + ttl_from_url(&url, now_unix_secs());
+        Self { url, expires_at }
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    fn is_valid(&self) -> bool {
+        Instant::now() < self.expires_at
+    }
+}
+
+/// Circuit breaker simple para yt-dlp.
+#[derive(Debug)]
+struct CircuitBreaker {
+    failures: u32,
+    last_failure: Option<Instant>,
+    state: CircuitState,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CircuitState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+impl CircuitBreaker {
+    fn new() -> Self {
+        Self {
+            failures: 0,
+            last_failure: None,
+            state: CircuitState::Closed,
+        }
+    }
+
+    fn record_success(&mut self) {
+        self.failures = 0;
+        self.state = CircuitState::Closed;
+    }
+
+    fn record_failure(&mut self) {
+        self.failures += 1;
+        self.last_failure = Some(Instant::now());
+        if self.failures >= CIRCUIT_BREAKER_THRESHOLD {
+            self.state = CircuitState::Open;
+        }
+    }
+
+    fn can_execute(&mut self) -> bool {
+        match self.state {
+            CircuitState::Closed => true,
+            CircuitState::Open => {
+                if let Some(last) = self.last_failure {
+                    if last.elapsed() > CIRCUIT_BREAKER_RESET {
+                        self.state = CircuitState::HalfOpen;
+                        return true;
+                    }
+                }
+                false
+            }
+            CircuitState::HalfOpen => true,
+        }
+    }
+}
+
+/// Servicio yt-dlp con cache, semáforo y circuit breaker.
+pub struct YtDlpService {
+    cache: Arc<DashMap<String, CacheEntry>>,
+    search_cache: Arc<DashMap<String, Vec<SearchResult>>>,
+    semaphore: Arc<Semaphore>,
+    circuit_breaker: Arc<tokio::sync::Mutex<CircuitBreaker>>,
+}
+
+impl YtDlpService {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(DashMap::new()),
+            search_cache: Arc::new(DashMap::new()),
+            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_YT_DLP)),
+            circuit_breaker: Arc::new(tokio::sync::Mutex::new(CircuitBreaker::new())),
+        }
+    }
+
+    /// Busca en YouTube y retorna resultados.
+    pub async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchResult>, CadenceError> {
+        let cache_key = format!("search:{}:{}", query, limit);
+        
+        // Check cache first
+        if let Some(cached) = self.search_cache.get(&cache_key) {
+            if !cached.is_empty() {
+                tracing::debug!(query = %query, limit, "Search cache hit");
+                return Ok(cached.clone());
+            }
+        }
+
+        let _permit = self.semaphore.acquire().await.map_err(|_| CadenceError::YtDlpExecution {
+            message: "Semaphore closed".to_string(),
+        })?;
+
+        let mut cb = self.circuit_breaker.lock().await;
+        if !cb.can_execute() {
+            return Err(CadenceError::YtDlpExecution {
+                message: "Circuit breaker open - too many failures".to_string(),
+            });
+        }
+        drop(cb);
+
+        let search_spec = format!("ytsearch{limit}:{query}");
+        let output = self.run_yt_dlp_search(&["--flat-playlist", "-j", &search_spec]).await;
+
+        let mut cb = self.circuit_breaker.lock().await;
+        match &output {
+            Ok(results) => {
+                cb.record_success();
+                // Cache successful results
+                self.search_cache.insert(cache_key, results.clone());
+                Ok(results.clone())
+            }
+            Err(_) => {
+                cb.record_failure();
+                // Return the error (move it out)
+                output
+            }
+        }
+    }
+
+    /// Resuelve un video ID a URL de audio directa.
+    pub async fn resolve_audio(&self, video_id: &str) -> Result<String, CadenceError> {
+        // Check cache first
+        if let Some(entry) = self.cache.get(video_id) {
+            if entry.is_valid() {
+                tracing::debug!(video_id = %video_id, "Audio URL cache hit");
+                return Ok(entry.url.clone());
+            } else {
+                // Expired, remove
+                self.cache.remove(video_id);
+            }
+        }
+
+        let _permit = self.semaphore.acquire().await.map_err(|_| CadenceError::YtDlpExecution {
+            message: "Semaphore closed".to_string(),
+        })?;
+
+        let mut cb = self.circuit_breaker.lock().await;
+        if !cb.can_execute() {
+            return Err(CadenceError::YtDlpExecution {
+                message: "Circuit breaker open - too many failures".to_string(),
+            });
+        }
+        drop(cb);
+
+        let watch_url = format!("https://www.youtube.com/watch?v={video_id}");
+        let output = self.run_yt_dlp_resolve(&["-f", "bestaudio", "-g", &watch_url]).await;
+
+        let mut cb = self.circuit_breaker.lock().await;
+        match &output {
+            Ok(url) => {
+                cb.record_success();
+                self.cache.insert(video_id.to_string(), CacheEntry::new(url.clone()));
+                Ok(url.clone())
+            }
+            Err(_) => {
+                cb.record_failure();
+                // Return the error (move it out)
+                output
+            }
+        }
+    }
+
+    /// Invalida cache para un video específico.
+    pub fn invalidate(&self, video_id: &str) {
+        self.cache.remove(video_id);
+    }
+
+    /// Limpia cache expirado.
+    pub fn cleanup_expired(&self) {
+        self.cache.retain(|_, v| v.is_valid());
+        self.search_cache.retain(|_, v| !v.is_empty());
+    }
+
+    /// Ejecuta yt-dlp para búsqueda y parsea resultados.
+    async fn run_yt_dlp_search(&self, args: &[&str]) -> Result<Vec<SearchResult>, CadenceError> {
+        let start = Instant::now();
+        tracing::debug!(args = ?args, "[yt-dlp] launching search");
+
+        let child = Command::new("yt-dlp")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(CadenceError::YtDlpSpawn)?;
+
+        tracing::debug!(pid = ?child.id(), elapsed = ?start.elapsed(), "[yt-dlp] spawned");
+
+        let output = timeout(YT_DLP_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                tracing::warn!(elapsed = ?start.elapsed(), "[yt-dlp] TIMED OUT");
+                CadenceError::YtDlpTimeout
+            })?
+            .map_err(CadenceError::YtDlpIo)?;
+
+        tracing::debug!(elapsed = ?start.elapsed(), status = %output.status, "[yt-dlp] finished");
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            tracing::warn!(stderr = %stderr, "[yt-dlp] execution failed");
+            return Err(self.annotate_execution_failure(stderr, args));
+        }
+
+        // Parsear líneas JSON (flat-playlist -j)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let entries = stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str::<YtDlpEntry>(line).map_err(CadenceError::YtDlpParse))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let results = entries
+            .into_iter()
+            .filter(|entry| entry.ie_key == "Youtube")
+            .map(SearchResult::from)
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Ejecuta yt-dlp para resolver audio URL.
+    async fn run_yt_dlp_resolve(&self, args: &[&str]) -> Result<String, CadenceError> {
+        let start = Instant::now();
+        tracing::debug!(args = ?args, "[yt-dlp] launching resolve");
+
+        let child = Command::new("yt-dlp")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(CadenceError::YtDlpSpawn)?;
+
+        tracing::debug!(pid = ?child.id(), elapsed = ?start.elapsed(), "[yt-dlp] spawned");
+
+        let output = timeout(YT_DLP_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                tracing::warn!(elapsed = ?start.elapsed(), "[yt-dlp] TIMED OUT");
+                CadenceError::YtDlpTimeout
+            })?
+            .map_err(CadenceError::YtDlpIo)?;
+
+        tracing::debug!(elapsed = ?start.elapsed(), status = %output.status, "[yt-dlp] finished");
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            tracing::warn!(stderr = %stderr, "[yt-dlp] execution failed");
+            return Err(self.annotate_execution_failure(stderr, args));
+        }
+
+        let url = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        if url.is_empty() {
+            return Err(CadenceError::YtDlpNoAudioStream {
+                video_id: args.iter()
+                    .find(|a| a.starts_with("https://www.youtube.com/watch?v="))
+                    .and_then(|a| a.split("v=").nth(1))
+                    .and_then(|a| a.split('&').next())
+                    .unwrap_or("unknown")
+                    .to_string(),
+            });
+        }
+
+        Ok(url)
+    }
+
+    fn annotate_execution_failure(&self, stderr: String, args: &[&str]) -> CadenceError {
+        if stderr.to_lowercase().contains("sign in") {
+            let video_id = args.iter()
+                .find(|a| a.starts_with("https://www.youtube.com/watch?v="))
+                .and_then(|a| a.split("v=").nth(1))
+                .and_then(|a| a.split('&').next())
+                .unwrap_or("unknown")
+                .to_string();
+            CadenceError::YtDlpAuthRequired { video_id }
+        } else if stderr.to_lowercase().contains("no audio") || stderr.to_lowercase().contains("no formats") {
+            let video_id = args.iter()
+                .find(|a| a.starts_with("https://www.youtube.com/watch?v="))
+                .and_then(|a| a.split("v=").nth(1))
+                .and_then(|a| a.split('&').next())
+                .unwrap_or("unknown")
+                .to_string();
+            CadenceError::YtDlpNoAudioStream { video_id }
+        } else {
+            CadenceError::YtDlpExecution { message: stderr }
+        }
+    }
+}
+
+impl Default for YtDlpService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Instancia global singleton para el servicio yt-dlp.
+static YT_DLP_SERVICE: Lazy<YtDlpService> = Lazy::new(YtDlpService::new);
+
+/// Busca en YouTube (API pública compatible con código existente).
+pub async fn search(query: &str, limit: u32) -> Result<Vec<SearchResult>, CadenceError> {
+    YT_DLP_SERVICE.search(query, limit).await
+}
+
+/// Resuelve audio URL (API pública compatible con código existente).
+pub async fn resolve_audio(video_id: &str) -> Result<String, CadenceError> {
+    YT_DLP_SERVICE.resolve_audio(video_id).await
 }
 
 #[cfg(test)]
@@ -161,10 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_returns_results_shaped_as_search_result() {
-        let results = search("Imagine Dragons Believer", 1)
-            .await
-            .expect("search should succeed");
-
+        let results = search("Imagine Dragons Believer", 1).await.expect("search should succeed");
         assert_eq!(results.len(), 1);
         let first = &results[0];
         assert!(!first.id.is_empty());
@@ -173,9 +427,6 @@ mod tests {
         assert!(first.thumbnail_url.contains(&first.id));
     }
 
-    // No network: flat-playlist mode never returns a thumbnail field, so
-    // this checks the construction logic directly rather than trusting
-    // yt-dlp to keep giving us a value it's known to omit.
     #[test]
     fn thumbnail_url_is_built_from_the_video_id() {
         let entry = YtDlpEntry {
@@ -185,14 +436,10 @@ mod tests {
             duration: Some(120.0),
             ie_key: "Youtube".to_string(),
         };
-
         let result = SearchResult::from(entry);
-
         assert_eq!(result.thumbnail_url, "https://i.ytimg.com/vi/abc123/hqdefault.jpg");
     }
 
-    // No network: whether a given query surfaces a channel result isn't
-    // guaranteed to stay reproducible, so this checks the filter directly.
     #[test]
     fn filter_playable_drops_non_video_entries() {
         let entries = vec![
@@ -211,33 +458,22 @@ mod tests {
                 ie_key: "YoutubeTab".to_string(),
             },
         ];
-
-        let results = filter_playable(entries);
-
+        let results: Vec<SearchResult> = entries.into_iter().filter(|e| e.ie_key == "Youtube").map(SearchResult::from).collect();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "abc123");
     }
 
     #[tokio::test]
     async fn search_respects_the_requested_limit() {
-        let results = search("Linkin Park Numb", 3)
-            .await
-            .expect("search should succeed");
-
+        let results = search("Linkin Park Numb", 3).await.expect("search should succeed");
         assert_eq!(results.len(), 3);
     }
 
     #[tokio::test]
     async fn resolve_audio_returns_a_direct_stream_url() {
-        let results = search("Imagine Dragons Believer", 1)
-            .await
-            .expect("search should succeed");
+        let results = search("Imagine Dragons Believer", 1).await.expect("search should succeed");
         let video_id = &results[0].id;
-
-        let url = resolve_audio(video_id)
-            .await
-            .expect("resolve_audio should succeed");
-
+        let url = resolve_audio(video_id).await.expect("resolve_audio should succeed");
         assert!(url.starts_with("https://"));
     }
 
@@ -247,31 +483,88 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Doesn't hit the network: real "sign in" restrictions aren't
-    // guaranteed to stay reproducible on a specific video, so this checks
-    // the classification logic directly against a synthetic yt-dlp stderr.
     #[test]
     fn recognizes_sign_in_required_as_a_distinct_error() {
-        let raw = CadenceError::YtDlpExecution {
-            message: "ERROR: [youtube] abc123: Sign in to confirm your age.".to_string(),
-        };
-
-        let classified = annotate_execution_failure(raw, "abc123");
-
-        assert!(matches!(
-            classified,
-            CadenceError::YtDlpAuthRequired { video_id } if video_id == "abc123"
-        ));
+        let service = YtDlpService::new();
+        let raw = "ERROR: [youtube] abc123: Sign in to confirm your age.";
+        let classified = service.annotate_execution_failure(raw.to_string(), &["https://www.youtube.com/watch?v=abc123"]);
+        assert!(matches!(classified, CadenceError::YtDlpAuthRequired { video_id } if video_id == "abc123"));
     }
 
     #[test]
     fn leaves_other_execution_failures_unclassified() {
-        let raw = CadenceError::YtDlpExecution {
-            message: "ERROR: [youtube] abc123: Video unavailable.".to_string(),
-        };
-
-        let classified = annotate_execution_failure(raw, "abc123");
-
+        let service = YtDlpService::new();
+        let raw = "ERROR: [youtube] abc123: Video unavailable.";
+        let classified = service.annotate_execution_failure(raw.to_string(), &["https://www.youtube.com/watch?v=abc123"]);
         assert!(matches!(classified, CadenceError::YtDlpExecution { .. }));
+    }
+
+    #[tokio::test]
+    async fn cache_works_for_resolve_audio() {
+        let service = YtDlpService::new();
+        let results = search("Imagine Dragons Believer", 1).await.expect("search");
+        let video_id = &results[0].id;
+        
+        // Primera llamada - cache miss
+        let url1 = service.resolve_audio(video_id).await.expect("resolve 1");
+        // Segunda llamada - cache hit
+        let url2 = service.resolve_audio(video_id).await.expect("resolve 2");
+        assert_eq!(url1, url2);
+    }
+
+    #[tokio::test]
+    async fn semaphore_limits_concurrency() {
+        let service = YtDlpService::new();
+        let permits = service.semaphore.available_permits();
+        assert_eq!(permits, MAX_CONCURRENT_YT_DLP);
+    }
+
+    #[test]
+    fn ttl_uses_signed_expiry_minus_safety_margin() {
+        let now = 1_000_000;
+        let url = format!(
+            "https://rr1.googlevideo.com/videoplayback?expire={}&mime=audio",
+            now + 3600
+        );
+        // La firma dura 1h, pero el TTL se capa a 30 min: re-resolvemos antes
+        // de acercarnos al borde.
+        assert_eq!(ttl_from_url(&url, now), CACHE_TTL);
+
+        // Si la firma caduca antes que el TTL por defecto, manda la firma
+        // (menos el margen de seguridad de 60s).
+        let short = format!("https://x.test/a?expire={}", now + 600);
+        assert_eq!(ttl_from_url(&short, now), Duration::from_secs(540));
+    }
+
+    #[test]
+    fn ttl_is_zero_for_already_expired_urls() {
+        let now = 1_000_000;
+        let url = format!("https://rr1.googlevideo.com/videoplayback?expire={}", now - 10);
+        assert_eq!(ttl_from_url(&url, now), Duration::ZERO);
+        // También si está dentro del margen de seguridad.
+        let almost = format!("https://x.test/a?expire={}", now + 30);
+        assert_eq!(ttl_from_url(&almost, now), Duration::ZERO);
+    }
+
+    #[test]
+    fn ttl_falls_back_to_default_without_expire_param() {
+        let url = "https://rr1.googlevideo.com/videoplayback?mime=audio";
+        assert_eq!(ttl_from_url(url, 1_000_000), CACHE_TTL);
+    }
+
+    #[test]
+    fn ttl_is_capped_at_default_ttl() {
+        let now = 1_000_000;
+        let url = format!("https://x.test/a?expire={}", now + 24 * 3600);
+        assert_eq!(ttl_from_url(&url, now), CACHE_TTL);
+    }
+
+    #[test]
+    fn expired_url_is_not_cached() {
+        let entry = CacheEntry::new(format!(
+            "https://x.test/a?expire={}",
+            now_unix_secs().saturating_sub(5)
+        ));
+        assert!(!entry.is_valid());
     }
 }

@@ -3,32 +3,26 @@
 use std::sync::Arc;
 
 use tauri::Manager;
-use tokio::sync::Mutex;
 
 mod commands;
-mod errors;
+pub mod errors;
 pub mod models;
 pub mod services;
 
-use services::player::PlayerService;
-
-/// Tauri-managed state. `tokio::sync::Mutex` rather than `std::sync::Mutex`
-/// because every `PlayerService` method is async and held across `.await`
-/// points — a std mutex guard can't cross those without blocking the
-/// runtime thread.
-struct AppState {
-    player: Arc<Mutex<PlayerService>>,
-}
+use services::orchestrator::{PlayerOrchestrator, PlayerOrchestratorBuilder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Inicializar tracing
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let socket_path = std::env::temp_dir().join("cadence-mpv.sock");
-    // Bootstrap failure has no recovery path (no window exists yet to report
-    // the error), so this is the one legitimate exception to the no-expect rule.
+
     #[allow(clippy::expect_used)]
     let app = tauri::Builder::default()
-        // Must be the first plugin registered (Tauri's own requirement) —
-        // it needs to intercept a second launch before anything else runs.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -37,10 +31,30 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            let player = tauri::async_runtime::block_on(PlayerService::connect(socket_path))?;
-            app.manage(AppState {
-                player: Arc::new(Mutex::new(player)),
-            });
+            // Bloqueante a propósito: si el frontend llama un comando antes de
+            // que el estado esté gestionado, Tauri falla con "state not
+            // managed". Conectar mpv tarda ~100-300 ms.
+            let orchestrator = tauri::async_runtime::block_on(
+                PlayerOrchestratorBuilder::new(socket_path.clone()).build(),
+            )?;
+            app.manage(orchestrator);
+            tracing::info!("PlayerOrchestrator initialized");
+
+            // SIGTERM no dispara `ExitRequested` por sí solo: sin esto, el
+            // proceso muere y deja a mpv huérfano (lo limpia el pidfile en el
+            // próximo arranque, pero mejor apagarlo bien).
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let Ok(mut term) = signal(SignalKind::terminate()) else {
+                        return;
+                    };
+                    term.recv().await;
+                    tracing::info!("SIGTERM received, exiting cleanly");
+                    app_handle.exit(0);
+                });
+            }
 
             if let Some(icon) = app.default_window_icon().cloned() {
                 let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Salir de Cadence", true, None::<&str>)?;
@@ -103,12 +117,9 @@ pub fn run() {
             commands::playback::set_loop,
             commands::player::state,
             commands::player::health,
+            commands::player::subscribe_events,
             commands::app::quit,
         ])
-        // Closing the window hides it instead of quitting — mpv keeps
-        // playing, and a second launch (single-instance, above) just
-        // re-shows this same window. commands::app::quit is the only way
-        // to actually end the process.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -119,15 +130,12 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        // Tauri's normal exit path does not guarantee Drop runs (see
-        // MpvPlayer::kill), so mpv must be killed explicitly here or it
-        // outlives the window that spawned it.
         if let tauri::RunEvent::ExitRequested { .. } = event {
-            let app_handle = app_handle.clone();
-            tauri::async_runtime::block_on(async move {
-                let state = app_handle.state::<AppState>();
-                state.player.lock().await.shutdown().await;
-            });
+            // Bloqueante: si solo spawneamos, el runtime puede apagarse antes
+            // de que mpv reciba el shutdown y quedaría un proceso huérfano.
+            if let Some(orchestrator) = app_handle.try_state::<Arc<PlayerOrchestrator>>() {
+                tauri::async_runtime::block_on(orchestrator.shutdown());
+            }
         }
     });
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -82,11 +83,45 @@ impl CadenceError {
 // Tauri serializes a command's `Err` to send it to the frontend, so this
 // carries the user-facing message rather than the full Display output,
 // which can include raw yt-dlp/mpv internals not fit for the UI.
-impl serde::Serialize for CadenceError {
+impl Serialize for CadenceError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         serializer.serialize_str(self.user_message())
+    }
+}
+
+/// Error tipado para el frontend con discriminante para manejo granular.
+///
+/// Todavía no se usa como tipo de retorno de los comandos (el frontend espera
+/// un string), pero se mantiene listo para migrar el contrato IPC sin romper
+/// a los consumidores actuales.
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "type", content = "data")]
+pub enum FrontendError {
+    YtDlpAuthRequired { video_id: String },
+    YtDlpNoAudioStream { video_id: String },
+    YtDlpTimeout,
+    YtDlpUnavailable,
+    MpvConnectionLost,
+    MpvCommandRejected { command: String, reason: String },
+    NetworkError,
+    Unknown { message: String },
+}
+
+impl From<CadenceError> for FrontendError {
+    fn from(err: CadenceError) -> Self {
+        match err {
+            CadenceError::YtDlpAuthRequired { video_id } => FrontendError::YtDlpAuthRequired { video_id },
+            CadenceError::YtDlpNoAudioStream { video_id } => FrontendError::YtDlpNoAudioStream { video_id },
+            CadenceError::YtDlpTimeout => FrontendError::YtDlpTimeout,
+            CadenceError::YtDlpSpawn(_) | CadenceError::YtDlpIo(_) => FrontendError::YtDlpUnavailable,
+            CadenceError::YtDlpExecution { .. } | CadenceError::YtDlpParse(_) => FrontendError::Unknown { message: err.user_message().to_string() },
+            CadenceError::MpvConnectionClosed | CadenceError::MpvSocketTimeout(_) => FrontendError::MpvConnectionLost,
+            CadenceError::MpvCommand { command, message } => FrontendError::MpvCommandRejected { command, reason: message },
+            CadenceError::MpvSpawn(_) | CadenceError::MpvIo(_) | CadenceError::MpvSerialize(_) => FrontendError::MpvConnectionLost,
+        }
     }
 }

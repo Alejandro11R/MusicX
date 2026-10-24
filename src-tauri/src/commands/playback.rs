@@ -1,52 +1,59 @@
-use tauri::State;
+use std::sync::Arc;
 
 use crate::errors::CadenceError;
 use crate::models::search_result::SearchResult;
-use crate::AppState;
+use crate::services::orchestrator::PlayerOrchestrator;
 
-// Takes the full SearchResult (the frontend already has it from a prior
-// search() call) rather than just a video_id, so PlayerService can keep it
-// as `current` without a second round-trip to yt-dlp for its metadata.
 #[tauri::command]
-pub async fn play(app_state: State<'_, AppState>, track: SearchResult) -> Result<(), CadenceError> {
-    // Lets a report like "the third result fails" be reproduced from the
-    // terminal in seconds, instead of guessing which video_id was clicked.
-    eprintln!("Playing: {} (id: {})", track.title, track.id);
-    app_state.player.lock().await.play(track).await
+pub async fn play(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    track: SearchResult,
+) -> Result<(), CadenceError> {
+    tracing::info!(track_id = %track.id, title = %track.title, "Playing track");
+    orchestrator.play(track).await
 }
 
 #[tauri::command]
-pub async fn pause(app_state: State<'_, AppState>) -> Result<(), CadenceError> {
-    app_state.player.lock().await.pause().await
+pub async fn pause(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+) -> Result<(), CadenceError> {
+    orchestrator.pause().await
 }
 
 #[tauri::command]
-pub async fn resume(app_state: State<'_, AppState>) -> Result<(), CadenceError> {
-    app_state.player.lock().await.resume().await
+pub async fn resume(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+) -> Result<(), CadenceError> {
+    orchestrator.resume().await
 }
 
 #[tauri::command]
-pub async fn stop(app_state: State<'_, AppState>) -> Result<(), CadenceError> {
-    app_state.player.lock().await.stop().await
+pub async fn stop(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+) -> Result<(), CadenceError> {
+    orchestrator.stop().await
 }
 
 #[tauri::command]
-pub async fn set_volume(app_state: State<'_, AppState>, level: f64) -> Result<(), CadenceError> {
-    app_state.player.lock().await.set_volume(level).await
+pub async fn set_volume(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    level: f64,
+) -> Result<(), CadenceError> {
+    orchestrator.set_volume(level).await
 }
 
 #[tauri::command]
 pub async fn seek(
-    app_state: State<'_, AppState>,
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
     position_seconds: f64,
 ) -> Result<(), CadenceError> {
-    app_state.player.lock().await.seek(position_seconds).await
+    orchestrator.seek(position_seconds).await
 }
 
 #[tauri::command]
 pub async fn set_loop(
-    app_state: State<'_, AppState>,
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
     enabled: bool,
 ) -> Result<(), CadenceError> {
-    app_state.player.lock().await.set_loop(enabled).await
+    orchestrator.set_loop(enabled).await
 }

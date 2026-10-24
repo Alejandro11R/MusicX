@@ -1,7 +1,9 @@
-import {
+import React, {
   useEffect,
   useRef,
   useState,
+  useCallback,
+  useMemo,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
@@ -24,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
+import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
 import {
   search,
   play,
@@ -36,18 +39,344 @@ import {
   getState,
   health,
   quit,
+  subscribeEvents,
+  listenOrchestratorEvents,
   type PlayerState,
   type SearchResult,
+  type OrchestratorEvent,
 } from "./lib/tauri";
 
-const POLL_INTERVAL_MS = 250;
+const POLL_INTERVAL_MS = 5000; // Fallback polling every 5s
 const RECENT_STORAGE_KEY = "cadence_recent_tracks";
+// Tras un seek, ignoramos los `Progress` que aún traen la posición vieja
+// (mpv tarda uno o dos ticks en reflejar el salto) para que el thumb no
+// rebote visualmente.
+const SEEK_GUARD_MS = 1200;
 
-function formatDuration(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.floor(totalSeconds % 60);
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+// ===== Memoized Components =====
+
+interface SearchResultItemProps {
+  track: SearchResult;
+  isSelected: boolean;
+  isPlaying: boolean;
+  isLoading: boolean;
+  onClick: () => void;
+  onMouseEnter: () => void;
 }
+
+const SearchResultItem = React.memo(function SearchResultItem({
+  track,
+  isSelected,
+  isPlaying,
+  isLoading,
+  onClick,
+  onMouseEnter,
+}: SearchResultItemProps) {
+  return (
+    <li>
+      <button
+        type="button"
+        className={cn(
+          "group relative flex w-full items-center gap-3 rounded-xl p-2 text-left transition-all duration-200",
+          "bg-white/[0.02] hover:bg-white/[0.08] border border-transparent hover:border-white/10",
+          isSelected && "bg-white/[0.09] border-white/15",
+          isPlaying &&
+            "bg-teal-500/10 border-teal-500/30 shadow-[0_0_15px_-3px_rgba(45,212,191,0.2)]",
+        )}
+        onClick={onClick}
+        onMouseEnter={onMouseEnter}
+        disabled={isLoading}
+      >
+        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm">
+          <img
+            src={track.thumbnail_url}
+            alt=""
+            className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+            loading="lazy"
+            onError={(e) => {
+              (e.currentTarget as HTMLElement).style.display = "none";
+            }}
+          />
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
+              <Loader2 className="size-4 animate-spin text-teal-300" />
+            </div>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
+          <span
+            className={cn(
+              "truncate text-xs font-medium leading-tight",
+              isPlaying ? "text-teal-300" : "text-white/90",
+            )}
+          >
+            {track.title}
+          </span>
+          {track.artist && (
+            <span className="truncate text-[11px] text-white/50">
+              {track.artist}
+            </span>
+          )}
+        </div>
+        <span className="shrink-0 text-[11px] tabular-nums text-white/40">
+          {formatDuration(track.duration_seconds)}
+        </span>
+      </button>
+    </li>
+  );
+});
+
+interface RecentTrackItemProps {
+  track: SearchResult;
+  isPlaying: boolean;
+  isLoading: boolean;
+  onClick: () => void;
+}
+
+const RecentTrackItem = React.memo(function RecentTrackItem({
+  track,
+  isPlaying,
+  isLoading,
+  onClick,
+}: RecentTrackItemProps) {
+  return (
+    <li>
+      <button
+        type="button"
+        className={cn(
+          "group relative flex w-full items-center gap-3 rounded-xl p-2 text-left transition-all duration-200",
+          "bg-white/[0.02] hover:bg-white/[0.08] border border-transparent hover:border-white/10",
+          isPlaying &&
+            "bg-teal-500/10 border-teal-500/30 shadow-[0_0_15px_-3px_rgba(45,212,191,0.2)]",
+        )}
+        onClick={onClick}
+        disabled={isLoading}
+      >
+        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm">
+          <img
+            src={track.thumbnail_url}
+            alt=""
+            className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+            loading="lazy"
+            onError={(e) => {
+              (e.currentTarget as HTMLElement).style.display = "none";
+            }}
+          />
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
+              <Loader2 className="size-4 animate-spin text-teal-300" />
+            </div>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
+          <span
+            className={cn(
+              "truncate text-xs font-medium leading-tight",
+              isPlaying ? "text-teal-300" : "text-white/95",
+            )}
+          >
+            {track.title}
+          </span>
+          {track.artist && (
+            <span className="truncate text-[11px] text-white/60">
+              {track.artist}
+            </span>
+          )}
+        </div>
+        <span className="shrink-0 text-[11px] tabular-nums text-white/50">
+          {formatDuration(track.duration_seconds)}
+        </span>
+      </button>
+    </li>
+  );
+});
+
+interface NowPlayingProps {
+  playerState: PlayerState | null;
+  isTrackLoading: boolean;
+  isPlaying: boolean;
+  isLooping: boolean;
+  dragPosition: number | null;
+  onTogglePlayback: () => void;
+  onToggleLoop: () => void;
+  onStop: () => void;
+  /** Solo mueve el thumb; no llama al backend hasta soltar. */
+  onSeekPreview: (position: number) => void;
+  /** Confirma el seek al soltar el slider. */
+  onSeekCommit: (position: number) => void;
+  /** Mueve el volumen en la UI sin llamar a mpv todavía. */
+  onVolumePreview: (level: number) => void;
+  /** Aplica el volumen definitivo al soltar el slider. */
+  onVolumeCommit: (level: number) => void;
+  onToggleMute: () => void;
+  volume: number;
+}
+
+const NowPlaying = React.memo(function NowPlaying({
+  playerState,
+  isTrackLoading,
+  isPlaying,
+  isLooping,
+  dragPosition,
+  onTogglePlayback,
+  onToggleLoop,
+  onStop,
+  onSeekPreview,
+  onSeekCommit,
+  onVolumePreview,
+  onVolumeCommit,
+  onToggleMute,
+  volume,
+}: NowPlayingProps) {
+  const current = playerState?.current;
+  const duration = safeDuration(playerState?.duration_seconds ?? 0);
+  const position = safePosition(
+    dragPosition ?? playerState?.position_seconds ?? 0,
+    duration,
+  );
+
+  return (
+    <div className="liquid-card mt-auto flex flex-col gap-3 rounded-2xl p-3 border border-white/10 shadow-xl" role="region" aria-label="Reproductor">
+      {isTrackLoading && !current && (
+        <div className="flex items-center gap-2 py-1 text-xs text-teal-300" role="status">
+          <Loader2 className="size-3.5 animate-spin" />
+          <span>Cargando pista de audio...</span>
+        </div>
+      )}
+
+      {current && (
+        <div className="flex items-center gap-3">
+          <div
+            className={cn(
+              "size-12 shrink-0 overflow-hidden rounded-xl bg-white/10 border border-white/15 transition-all duration-300",
+              isPlaying && "shadow-[0_4px_20px_-2px_rgba(45,212,191,0.35)]",
+            )}
+          >
+            <img
+              src={current.thumbnail_url}
+              alt=""
+              className="size-full object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLElement).style.display = "none";
+              }}
+            />
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full transition-all",
+                  isPlaying ? "bg-teal-400 shadow-[0_0_6px_#2dd4bf] animate-pulse" : "bg-white/30",
+                )}
+              />
+              <p className="truncate text-xs font-semibold text-white/95">
+                {current.title}
+              </p>
+            </div>
+            {current.artist && (
+              <p className="truncate pl-3 text-[11px] text-white/60">
+                {current.artist}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {current && (
+        <div className="flex items-center gap-2 px-0.5">
+          <span className="w-8 shrink-0 text-right text-[10px] tabular-nums text-white/60">
+            {formatDuration(position)}
+          </span>
+          <Slider
+            className="flex-1"
+            value={[position]}
+            max={Math.max(duration, 1)}
+            step={1}
+            onValueChange={([value]) => onSeekPreview(value)}
+            onValueCommit={([value]) => onSeekCommit(value)}
+            aria-label="Posición de reproducción"
+            aria-valuetext={`${formatDuration(position)} de ${formatDuration(duration)}`}
+          />
+          <span className="w-8 shrink-0 text-[10px] tabular-nums text-white/60">
+            {formatDuration(duration)}
+          </span>
+        </div>
+      )}
+
+      {/* Controles Principales */}
+      <div className="flex items-center justify-center gap-3 pt-0.5">
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "size-8 rounded-full border transition-all",
+            isLooping
+              ? "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]"
+              : "bg-white/[0.04] text-white/60 border-white/5 hover:bg-white/[0.1] hover:text-white",
+          )}
+          onClick={onToggleLoop}
+          aria-label={isLooping ? "Desactivar bucle (L)" : "Activar bucle (L)"}
+          title={isLooping ? "Bucle activo (L)" : "Bucle inactivo (L)"}
+        >
+          <Repeat className={cn("size-3.5", isLooping && "stroke-[2.5]")} />
+        </Button>
+
+        <Button
+          size="icon"
+          className="size-10 rounded-full bg-gradient-to-br from-teal-400 to-emerald-500 text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.45)] hover:shadow-[0_0_24px_rgba(45,212,191,0.65)] hover:scale-105 active:scale-95 transition-all"
+          onClick={onTogglePlayback}
+          aria-label={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+          title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+        >
+          {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 ml-0.5 fill-current" />}
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 rounded-full bg-white/[0.04] border border-white/5 text-white/60 hover:bg-white/[0.1] hover:text-white transition-all"
+          onClick={onStop}
+          aria-label="Detener"
+          title="Detener"
+        >
+          <Square className="size-3.5 fill-current" />
+        </Button>
+      </div>
+
+      {/* Control de Volumen Líquido */}
+      <div className="flex items-center gap-2 px-1 pt-0.5">
+        <button
+          type="button"
+          onClick={onToggleMute}
+          className="text-white/60 hover:text-white transition-colors"
+          aria-label={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
+          title={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
+        >
+          {volume === 0 ? (
+            <VolumeX className="size-3.5 shrink-0 text-rose-300" />
+          ) : (
+            <Volume2 className="size-3.5 shrink-0 text-white/60" />
+          )}
+        </button>
+        <Slider
+          className="flex-1"
+          value={[volume]}
+          max={100}
+          step={1}
+          onValueChange={([level]) => onVolumePreview(level)}
+          onValueCommit={([level]) => onVolumeCommit(level)}
+          aria-label="Volumen"
+          aria-valuetext={`${volume}%`}
+        />
+        <span className="w-6 shrink-0 text-right text-[10px] tabular-nums text-white/60">
+          {volume}
+        </span>
+      </div>
+    </div>
+  );
+});
+
+// ===== Main App =====
 
 function App() {
   const [query, setQuery] = useState("");
@@ -64,6 +393,9 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const playerStateRef = useRef<PlayerState | null>(null);
   const prevVolumeRef = useRef<number>(100);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const unlistenRef = useRef<(() => void) | null>(null);
+  const seekGuardRef = useRef<{ target: number; at: number } | null>(null);
 
   useEffect(() => {
     playerStateRef.current = playerState;
@@ -86,6 +418,7 @@ function App() {
       console.error("Error al cargar historial:", e);
     }
 
+    // Health check inicial
     health()
       .then((h) => {
         if (!h.mpv) {
@@ -95,9 +428,16 @@ function App() {
         }
       })
       .catch((err) => console.error("health() check failed:", err));
-  }, []);
 
-  useEffect(() => {
+    // Suscribirse a eventos del orquestador
+    listenOrchestratorEvents(handleOrchestratorEvent).then((unlisten) => {
+      unlistenRef.current = unlisten;
+    });
+
+    // Suscribirse a eventos Tauri (para que el backend emita)
+    subscribeEvents().catch((err) => console.error("subscribeEvents failed:", err));
+
+    // Fallback polling (cada 5s) solo para recovery
     const poll = async () => {
       try {
         setPlayerState(await getState());
@@ -107,7 +447,58 @@ function App() {
     };
     poll();
     const interval = setInterval(poll, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+
+    return () => {
+      clearInterval(interval);
+      unlistenRef.current?.();
+    };
+  }, []);
+
+  // Manejar eventos del orquestador
+  const handleOrchestratorEvent = useCallback((event: OrchestratorEvent) => {
+    switch (event.type) {
+      case "Progress":
+        // Patch local: evita un round-trip IPC a 2 Hz. Mientras se arrastra el
+        // slider, NowPlaying ignora esto y usa `dragPosition`.
+        setPlayerState((prev) => {
+          if (!prev) return prev;
+          const guard = seekGuardRef.current;
+          let position = event.data.position_seconds;
+          if (guard) {
+            if (Date.now() - guard.at > SEEK_GUARD_MS) {
+              seekGuardRef.current = null;
+            } else if (Math.abs(position - guard.target) > 1.5) {
+              // mpv todavía reporta la posición anterior al seek.
+              position = prev.position_seconds;
+            } else {
+              seekGuardRef.current = null;
+            }
+          }
+          return {
+            ...prev,
+            position_seconds: position,
+            duration_seconds: event.data.duration_seconds,
+          };
+        });
+        break;
+      case "ConnectionChanged":
+        setPlayerState((prev) =>
+          prev ? { ...prev, connected: event.data.connected } : prev,
+        );
+        if (event.data.connected) {
+          getState().then(setPlayerState).catch(console.error);
+        }
+        break;
+      case "PlaybackError":
+        setError(event.data);
+        getState().then(setPlayerState).catch(console.error);
+        break;
+      case "TrackStarted":
+      case "TrackEnded":
+      case "StateChanged":
+        getState().then(setPlayerState).catch(console.error);
+        break;
+    }
   }, []);
 
   useEffect(() => {
@@ -134,13 +525,10 @@ function App() {
         handleToggleLoop();
       } else if (!isSearchFocused && e.key === "ArrowLeft") {
         e.preventDefault();
-        const cur = playerStateRef.current?.position_seconds ?? 0;
-        seek(Math.max(0, cur - 5)).catch(() => {});
+        handleSeekBy(-5);
       } else if (!isSearchFocused && e.key === "ArrowRight") {
         e.preventDefault();
-        const cur = playerStateRef.current?.position_seconds ?? 0;
-        const dur = playerStateRef.current?.duration_seconds ?? 0;
-        seek(Math.min(dur, cur + 5)).catch(() => {});
+        handleSeekBy(5);
       }
     }
     document.addEventListener("keydown", handleGlobalKeyDown);
@@ -171,23 +559,36 @@ function App() {
 
   async function runSearch(q: string) {
     if (!q.trim()) return;
+    
+    // Cancelar búsqueda anterior
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
     setError(null);
     setIsSearching(true);
     try {
       const found = await search(q, 10);
+      // Verificar si fue abortado
+      if (controller.signal.aborted) return;
       setResults(found);
       setResultsQuery(q);
       setSelectedIndex(null);
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       setError(String(err));
     } finally {
-      setIsSearching(false);
+      if (!controller.signal.aborted) {
+        setIsSearching(false);
+      }
     }
   }
 
   async function handlePlay(track: SearchResult) {
     setError(null);
     setLoadingTrackId(track.id);
+    setDragPosition(null);
+    seekGuardRef.current = null;
     saveToRecent(track);
     try {
       await play(track);
@@ -229,78 +630,129 @@ function App() {
   }
 
   async function handleTogglePlayback() {
+    const state = playerStateRef.current;
+    if (!state?.current) return;
+
+    const wasPlaying = state.status === "Playing";
     setError(null);
+    // Optimista: el icono responde al instante; el evento/estado confirma.
+    setPlayerState((prev) =>
+      prev ? { ...prev, status: wasPlaying ? "Paused" : "Playing" } : prev,
+    );
     try {
-      if (playerState?.status === "Playing") {
+      if (wasPlaying) {
         await pause();
       } else {
         await resume();
       }
     } catch (err) {
       setError(String(err));
+      getState().then(setPlayerState).catch(console.error);
     }
   }
 
   async function handleToggleLoop() {
-    if (!playerState) return;
+    const state = playerStateRef.current;
+    if (!state) return;
+
+    const next = !state.looping;
+    setPlayerState((prev) => (prev ? { ...prev, looping: next } : prev));
     try {
-      await setLoop(!playerState.looping);
+      await setLoop(next);
     } catch (err) {
       setError(String(err));
+      getState().then(setPlayerState).catch(console.error);
     }
   }
 
   async function handleStop() {
     setError(null);
+    seekGuardRef.current = null;
     try {
       await stop();
+      setPlayerState((prev) =>
+        prev
+          ? { ...prev, status: "Stopped", current: null, position_seconds: 0 }
+          : prev,
+      );
+      setDragPosition(null);
     } catch (err) {
       setError(String(err));
     }
   }
 
-  async function handleVolumeChange(level: number) {
-    if (level > 0) {
-      setPrevVolume(level);
+  /** Preview local: el slider se mueve sin saturar el IPC de mpv. */
+  function handleVolumePreview(level: number) {
+    const volume = Math.round(level);
+    if (volume > 0) {
+      setPrevVolume(volume);
     }
+    setPlayerState((prev) => (prev ? { ...prev, volume } : prev));
+  }
+
+  /** Commit al soltar el slider: aquí sí hablamos con mpv. */
+  async function handleVolumeCommit(level: number) {
+    const volume = Math.round(level);
+    handleVolumePreview(volume);
     try {
-      await setVolume(level);
+      await setVolume(volume);
     } catch (err) {
       setError(String(err));
+      getState().then(setPlayerState).catch(console.error);
     }
   }
 
   async function handleToggleMute() {
     const curVol = playerStateRef.current?.volume ?? 100;
+    const next = curVol === 0 ? (prevVolumeRef.current > 0 ? prevVolumeRef.current : 100) : 0;
+    if (next > 0) {
+      setPrevVolume(next);
+    }
+    setPlayerState((prev) => (prev ? { ...prev, volume: next } : prev));
     try {
-      if (curVol === 0) {
-        const restore = prevVolumeRef.current > 0 ? prevVolumeRef.current : 100;
-        await setVolume(restore);
-      } else {
-        setPrevVolume(curVol);
-        await setVolume(0);
-      }
+      await setVolume(next);
     } catch (err) {
       setError(String(err));
+      getState().then(setPlayerState).catch(console.error);
     }
   }
 
   async function handleSeekCommit(positionSeconds: number) {
+    const state = playerStateRef.current;
+    const target = safePosition(positionSeconds, state?.duration_seconds ?? 0);
+
+    seekGuardRef.current = { target, at: Date.now() };
+    setDragPosition(null);
+    setPlayerState((prev) =>
+      prev ? { ...prev, position_seconds: target } : prev,
+    );
     try {
-      await seek(positionSeconds);
+      await seek(target);
     } catch (err) {
       setError(String(err));
-    } finally {
-      setDragPosition(null);
+      getState().then(setPlayerState).catch(console.error);
     }
+  }
+
+  function handleSeekBy(deltaSeconds: number) {
+    const state = playerStateRef.current;
+    if (!state?.current) return;
+    const target = seekTarget(
+      state.position_seconds,
+      deltaSeconds,
+      state.duration_seconds,
+    );
+    handleSeekCommit(target);
   }
 
   const volume = playerState?.volume ?? 100;
   const isPlaying = playerState?.status === "Playing";
   const isLooping = playerState?.looping ?? false;
-  const duration = playerState?.duration_seconds ?? 0;
-  const position = dragPosition ?? playerState?.position_seconds ?? 0;
   const isTrackLoading = loadingTrackId !== null;
+
+  // Memoized derived values
+  const searchResults = useMemo(() => results, [results]);
+  const recentTracksMemo = useMemo(() => recentTracks, [recentTracks]);
 
   return (
     <main className="flex h-screen w-screen p-2.5">
@@ -411,66 +863,38 @@ function App() {
           </div>
         )}
 
+        {playerState?.connected === false && (
+          <div
+            className="flex items-center gap-2 rounded-lg bg-amber-400/15 border border-amber-400/30 px-3 py-1.5 text-xs text-amber-200"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />
+            <span className="flex-1">
+              Reconectando con el reproductor… la reproducción se reanudará sola.
+            </span>
+          </div>
+        )}
+
         {/* Resultados de Búsqueda */}
         {results.length > 0 && (
           <div className="flex min-h-0 flex-1 flex-col gap-2">
             <ScrollArea className="min-h-0 flex-1 pr-1">
               <ol className="flex flex-col gap-1.5">
-                {results.map((track, index) => {
+                {searchResults.map((track, index) => {
                   const isCurrentItemLoading = loadingTrackId === track.id;
                   const isCurrentTrackPlaying = playerState?.current?.id === track.id;
 
                   return (
-                    <li key={track.id}>
-                      <button
-                        type="button"
-                        className={cn(
-                          "group relative flex w-full items-center gap-3 rounded-xl p-2 text-left transition-all duration-200",
-                          "bg-white/[0.02] hover:bg-white/[0.08] border border-transparent hover:border-white/10",
-                          index === selectedIndex && "bg-white/[0.09] border-white/15",
-                          isCurrentTrackPlaying &&
-                            "bg-teal-500/10 border-teal-500/30 shadow-[0_0_15px_-3px_rgba(45,212,191,0.2)]",
-                        )}
-                        onClick={() => handlePlay(track)}
-                        onMouseEnter={() => setSelectedIndex(index)}
-                        disabled={isTrackLoading}
-                      >
-                        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm">
-                          <img
-                            src={track.thumbnail_url}
-                            alt=""
-                            className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
-                            loading="lazy"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLElement).style.display = "none";
-                            }}
-                          />
-                          {isCurrentItemLoading && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
-                              <Loader2 className="size-4 animate-spin text-teal-300" />
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex min-w-0 flex-1 flex-col justify-center">
-                          <span
-                            className={cn(
-                              "truncate text-xs font-medium leading-tight",
-                              isCurrentTrackPlaying ? "text-teal-300" : "text-white/90",
-                            )}
-                          >
-                            {track.title}
-                          </span>
-                          {track.artist && (
-                            <span className="truncate text-[11px] text-white/50">
-                              {track.artist}
-                            </span>
-                          )}
-                        </div>
-                        <span className="shrink-0 text-[11px] tabular-nums text-white/40">
-                          {formatDuration(track.duration_seconds)}
-                        </span>
-                      </button>
-                    </li>
+                    <SearchResultItem
+                      key={track.id}
+                      track={track}
+                      isSelected={index === selectedIndex}
+                      isPlaying={isCurrentTrackPlaying}
+                      isLoading={isCurrentItemLoading}
+                      onClick={() => handlePlay(track)}
+                      onMouseEnter={() => setSelectedIndex(index)}
+                    />
                   );
                 })}
               </ol>
@@ -506,7 +930,7 @@ function App() {
         )}
 
         {/* Historial Reciente (cuando no hay búsqueda activa) */}
-        {results.length === 0 && resultsQuery === "" && recentTracks.length > 0 && (
+        {results.length === 0 && resultsQuery === "" && recentTracksMemo.length > 0 && (
           <div className="flex min-h-0 flex-1 flex-col gap-2">
             <div className="flex items-center justify-between px-1">
               <span className="flex items-center gap-1.5 text-xs font-medium text-white/70">
@@ -523,59 +947,18 @@ function App() {
             </div>
             <ScrollArea className="min-h-0 flex-1 pr-1">
               <ol className="flex flex-col gap-1.5">
-                {recentTracks.map((track) => {
+                {recentTracksMemo.map((track) => {
                   const isCurrentItemLoading = loadingTrackId === track.id;
                   const isCurrentTrackPlaying = playerState?.current?.id === track.id;
 
                   return (
-                    <li key={track.id}>
-                      <button
-                        type="button"
-                        className={cn(
-                          "group relative flex w-full items-center gap-3 rounded-xl p-2 text-left transition-all duration-200",
-                          "bg-white/[0.02] hover:bg-white/[0.08] border border-transparent hover:border-white/10",
-                          isCurrentTrackPlaying &&
-                            "bg-teal-500/10 border-teal-500/30 shadow-[0_0_15px_-3px_rgba(45,212,191,0.2)]",
-                        )}
-                        onClick={() => handlePlay(track)}
-                        disabled={isTrackLoading}
-                      >
-                        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm">
-                          <img
-                            src={track.thumbnail_url}
-                            alt=""
-                            className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
-                            loading="lazy"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLElement).style.display = "none";
-                            }}
-                          />
-                          {isCurrentItemLoading && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
-                              <Loader2 className="size-4 animate-spin text-teal-300" />
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex min-w-0 flex-1 flex-col justify-center">
-                          <span
-                            className={cn(
-                              "truncate text-xs font-medium leading-tight",
-                              isCurrentTrackPlaying ? "text-teal-300" : "text-white/95",
-                            )}
-                          >
-                            {track.title}
-                          </span>
-                          {track.artist && (
-                            <span className="truncate text-[11px] text-white/60">
-                              {track.artist}
-                            </span>
-                          )}
-                        </div>
-                        <span className="shrink-0 text-[11px] tabular-nums text-white/50">
-                          {formatDuration(track.duration_seconds)}
-                        </span>
-                      </button>
-                    </li>
+                    <RecentTrackItem
+                      key={track.id}
+                      track={track}
+                      isPlaying={isCurrentTrackPlaying}
+                      isLoading={isCurrentItemLoading}
+                      onClick={() => handlePlay(track)}
+                    />
                   );
                 })}
               </ol>
@@ -599,7 +982,7 @@ function App() {
         )}
 
         {/* Pantalla vacía inicial de concentración */}
-        {results.length === 0 && resultsQuery === "" && recentTracks.length === 0 && (
+        {results.length === 0 && resultsQuery === "" && recentTracksMemo.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
             <div className="size-14 rounded-2xl liquid-pill flex items-center justify-center text-teal-300/80 shadow-lg">
               <Headphones className="size-7" />
@@ -615,140 +998,22 @@ function App() {
 
         {/* Tarjeta Flotante Now Playing (Glassmorphism Líquido) */}
         {(isTrackLoading || playerState?.current) && (
-          <div className="liquid-card mt-auto flex flex-col gap-3 rounded-2xl p-3 border border-white/10 shadow-xl" role="region" aria-label="Reproductor">
-            {isTrackLoading && !playerState?.current && (
-              <div className="flex items-center gap-2 py-1 text-xs text-teal-300" role="status">
-                <Loader2 className="size-3.5 animate-spin" />
-                <span>Cargando pista de audio...</span>
-              </div>
-            )}
-
-            {playerState?.current && (
-              <div className="flex items-center gap-3">
-                <div
-                  className={cn(
-                    "size-12 shrink-0 overflow-hidden rounded-xl bg-white/10 border border-white/15 transition-all duration-300",
-                    isPlaying && "shadow-[0_4px_20px_-2px_rgba(45,212,191,0.35)]",
-                  )}
-                >
-                  <img
-                    src={playerState.current.thumbnail_url}
-                    alt=""
-                    className="size-full object-cover"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLElement).style.display = "none";
-                    }}
-                  />
-                </div>
-                <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={cn(
-                        "size-1.5 shrink-0 rounded-full transition-all",
-                        isPlaying ? "bg-teal-400 shadow-[0_0_6px_#2dd4bf] animate-pulse" : "bg-white/30",
-                      )}
-                    />
-                    <p className="truncate text-xs font-semibold text-white/95">
-                      {playerState.current.title}
-                    </p>
-                  </div>
-                  {playerState.current.artist && (
-                    <p className="truncate pl-3 text-[11px] text-white/60">
-                      {playerState.current.artist}
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {playerState?.current && (
-              <div className="flex items-center gap-2 px-0.5">
-                <span className="w-8 shrink-0 text-right text-[10px] tabular-nums text-white/60">
-                  {formatDuration(position)}
-                </span>
-                <Slider
-                  className="flex-1"
-                  value={[position]}
-                  max={Math.max(duration, 1)}
-                  step={1}
-                  onValueChange={([v]) => setDragPosition(v)}
-                  onValueCommit={([v]) => handleSeekCommit(v)}
-                  aria-label="Posición de reproducción"
-                />
-                <span className="w-8 shrink-0 text-[10px] tabular-nums text-white/60">
-                  {formatDuration(duration)}
-                </span>
-              </div>
-            )}
-
-            {/* Controles Principales */}
-            <div className="flex items-center justify-center gap-3 pt-0.5">
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "size-8 rounded-full border transition-all",
-                  isLooping
-                    ? "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]"
-                    : "bg-white/[0.04] text-white/60 border-white/5 hover:bg-white/[0.1] hover:text-white",
-                )}
-                onClick={handleToggleLoop}
-                aria-label={isLooping ? "Desactivar bucle (L)" : "Activar bucle (L)"}
-                title={isLooping ? "Bucle activo (L)" : "Bucle inactivo (L)"}
-              >
-                <Repeat className={cn("size-3.5", isLooping && "stroke-[2.5]")} />
-              </Button>
-
-              <Button
-                size="icon"
-                className="size-10 rounded-full bg-gradient-to-br from-teal-400 to-emerald-500 text-slate-950 shadow-[0_0_18px_rgba(45,212,191,0.45)] hover:shadow-[0_0_24px_rgba(45,212,191,0.65)] hover:scale-105 active:scale-95 transition-all"
-                onClick={handleTogglePlayback}
-                aria-label={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
-                title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
-              >
-                {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 ml-0.5 fill-current" />}
-              </Button>
-
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 rounded-full bg-white/[0.04] border border-white/5 text-white/60 hover:bg-white/[0.1] hover:text-white transition-all"
-                onClick={handleStop}
-                aria-label="Detener"
-                title="Detener"
-              >
-                <Square className="size-3.5 fill-current" />
-              </Button>
-            </div>
-
-            {/* Control de Volumen Líquido */}
-            <div className="flex items-center gap-2 px-1 pt-0.5">
-              <button
-                type="button"
-                onClick={handleToggleMute}
-                className="text-white/60 hover:text-white transition-colors"
-                aria-label={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
-                title={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
-              >
-                {volume === 0 ? (
-                  <VolumeX className="size-3.5 shrink-0 text-rose-300" />
-                ) : (
-                  <Volume2 className="size-3.5 shrink-0 text-white/60" />
-                )}
-              </button>
-              <Slider
-                className="flex-1"
-                value={[volume]}
-                max={100}
-                step={1}
-                onValueChange={([level]) => handleVolumeChange(level)}
-                aria-label="Volumen"
-              />
-              <span className="w-6 shrink-0 text-right text-[10px] tabular-nums text-white/60">
-                {volume}
-              </span>
-            </div>
-          </div>
+          <NowPlaying
+            playerState={playerState}
+            isTrackLoading={isTrackLoading}
+            isPlaying={isPlaying}
+            isLooping={isLooping}
+            dragPosition={dragPosition}
+            onTogglePlayback={handleTogglePlayback}
+            onToggleLoop={handleToggleLoop}
+            onStop={handleStop}
+            onSeekPreview={setDragPosition}
+            onSeekCommit={handleSeekCommit}
+            onVolumePreview={handleVolumePreview}
+            onVolumeCommit={handleVolumeCommit}
+            onToggleMute={handleToggleMute}
+            volume={volume}
+          />
         )}
       </div>
     </main>

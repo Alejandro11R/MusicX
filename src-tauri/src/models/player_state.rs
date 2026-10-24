@@ -2,15 +2,16 @@ use serde::{Deserialize, Serialize};
 
 use super::search_result::SearchResult;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum PlaybackStatus {
+    #[default]
     Stopped,
     Loading,
     Playing,
     Paused,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PlayerState {
     pub status: PlaybackStatus,
     pub current: Option<SearchResult>,
@@ -18,6 +19,14 @@ pub struct PlayerState {
     pub duration_seconds: f64,
     pub volume: f64,
     pub looping: bool,
+    /// Si el socket con mpv está conectado. El frontend muestra un aviso de
+    /// reconexión cuando pasa a `false`.
+    #[serde(default = "default_connected")]
+    pub connected: bool,
+}
+
+fn default_connected() -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -44,6 +53,7 @@ mod tests {
             duration_seconds: 187.0,
             volume: 60.0,
             looping: true,
+            connected: true,
         };
 
         let json = serde_json::to_string(&state).expect("serialize PlayerState");
@@ -61,6 +71,7 @@ mod tests {
             duration_seconds: 0.0,
             volume: 100.0,
             looping: false,
+            connected: true,
         };
 
         let json = serde_json::to_string(&state).expect("serialize PlayerState");
@@ -68,5 +79,31 @@ mod tests {
 
         assert_eq!(restored.current, None);
         assert_eq!(restored.status, PlaybackStatus::Stopped);
+    }
+
+    #[test]
+    fn default_impl_works() {
+        let state = PlayerState::default();
+        assert_eq!(state.status, PlaybackStatus::Stopped);
+        assert_eq!(state.current, None);
+        assert_eq!(state.position_seconds, 0.0);
+        assert_eq!(state.duration_seconds, 0.0);
+        assert_eq!(state.volume, 0.0);
+        assert!(!state.looping);
+        assert!(!state.connected);
+    }
+
+    #[test]
+    fn missing_connected_field_defaults_to_true_for_old_payloads() {
+        let json = r#"{
+            "status": "Playing",
+            "current": null,
+            "position_seconds": 1.0,
+            "duration_seconds": 2.0,
+            "volume": 50.0,
+            "looping": false
+        }"#;
+        let state: PlayerState = serde_json::from_str(json).expect("deserialize legacy state");
+        assert!(state.connected);
     }
 }

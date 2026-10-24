@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 // Field names deliberately mirror the Rust structs (snake_case) exactly —
 // there's no serde rename on the backend, so this is what actually crosses
@@ -22,12 +23,24 @@ export interface PlayerState {
   duration_seconds: number;
   volume: number;
   looping: boolean;
+  /** false mientras el backend está reconectando con mpv. */
+  connected: boolean;
 }
 
 export interface HealthStatus {
   mpv: boolean;
   yt_dlp: boolean;
 }
+
+// Orchestrator events. The backend serializes them with
+// #[serde(tag = "type", content = "data")].
+export type OrchestratorEvent =
+  | { type: "TrackStarted"; data: SearchResult }
+  | { type: "TrackEnded"; data: { reason: string } }
+  | { type: "PlaybackError"; data: string }
+  | { type: "StateChanged"; data: PlaybackStatus }
+  | { type: "ConnectionChanged"; data: { connected: boolean } }
+  | { type: "Progress"; data: { position_seconds: number; duration_seconds: number } };
 
 export function search(query: string, limit: number): Promise<SearchResult[]> {
   return invoke("search", { query, limit });
@@ -71,4 +84,16 @@ export function health(): Promise<HealthStatus> {
 
 export function quit(): Promise<void> {
   return invoke("quit");
+}
+
+/// Subscribe to orchestrator events (player-state-changed, track-ended, etc.)
+export function subscribeEvents(): Promise<void> {
+  return invoke("subscribe_events");
+}
+
+/// Listen for orchestrator events from the backend
+export function listenOrchestratorEvents(
+  callback: (event: OrchestratorEvent) => void
+): Promise<UnlistenFn> {
+  return listen<OrchestratorEvent>("orchestrator-event", (e) => callback(e.payload));
 }

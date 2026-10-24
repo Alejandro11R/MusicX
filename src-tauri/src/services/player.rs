@@ -77,6 +77,7 @@ impl PlayerService {
             duration_seconds: mpv_status.duration_seconds.unwrap_or(0.0),
             volume: mpv_status.volume,
             looping: mpv_status.looping,
+            connected: true,
         })
     }
 }
