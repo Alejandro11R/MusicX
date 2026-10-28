@@ -7,6 +7,7 @@ import React, {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
+  ChevronDown,
   Clock,
   Headphones,
   Link2,
@@ -21,6 +22,7 @@ import {
   Search,
   SkipBack,
   SkipForward,
+  Sliders,
   Square,
   Volume2,
   VolumeX,
@@ -467,6 +469,7 @@ const NowPlaying = React.memo(function NowPlaying({
   onSelectPreset,
   onCycleSpeed,
 }: NowPlayingProps) {
+  const [showAudioFx, setShowAudioFx] = useState(false);
   const current = playerState?.current;
   const duration = safeDuration(playerState?.duration_seconds ?? 0);
   const position = safePosition(
@@ -666,6 +669,21 @@ const NowPlaying = React.memo(function NowPlaying({
             <Mic2 className="size-3.5" />
           </GlassButton>
         )}
+
+        <GlassButton
+          variant="ghost"
+          size="md"
+          aria-label={showAudioFx ? "Ocultar efectos de audio" : "Mostrar efectos de audio"}
+          title="Efectos de audio y velocidad (EQ)"
+          onClick={() => setShowAudioFx((prev) => !prev)}
+          className={cn(
+            "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
+            (showAudioFx || (playerState?.audio_preset ?? "normal") !== "normal" || (playerState?.speed ?? 1.0) !== 1.0) &&
+              "bg-purple-500/20 text-purple-300 border-purple-400/40 shadow-[0_0_10px_rgba(168,85,247,0.3)]",
+          )}
+        >
+          <Sliders className="size-3.5" />
+        </GlassButton>
       </div>
 
       {/* Control de Volumen Líquido */}
@@ -699,45 +717,211 @@ const NowPlaying = React.memo(function NowPlaying({
         </span>
       </div>
 
-      {/* Audio FX Presets & Velocidad */}
-      <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-white/5 text-[10px]">
-        <div className="flex items-center gap-1 overflow-x-auto py-0.5 no-scrollbar">
-          {AUDIO_PRESETS.map((p) => {
-            const active = (playerState?.audio_preset ?? "normal") === p.id;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => onSelectPreset(p.id)}
-                className={cn(
-                  "flex items-center gap-1 px-2 py-0.5 rounded-lg transition-all duration-200 border whitespace-nowrap",
-                  active
-                    ? "bg-teal-400/25 border-teal-300/50 text-teal-200 font-medium shadow-[0_0_8px_rgba(45,212,191,0.25)]"
-                    : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white hover:bg-white/[0.08]"
-                )}
-                title={`Preset ${p.label}`}
-              >
-                <span>{p.icon}</span>
-                <span>{p.label}</span>
-              </button>
-            );
-          })}
+      {/* Audio FX Presets & Velocidad colapsable */}
+      {showAudioFx && (
+        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-white/5 text-[10px] animate-in fade-in duration-200">
+          <div className="flex items-center gap-1 overflow-x-auto py-0.5 no-scrollbar">
+            {AUDIO_PRESETS.map((p) => {
+              const active = (playerState?.audio_preset ?? "normal") === p.id;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => onSelectPreset(p.id)}
+                  className={cn(
+                    "flex items-center gap-1 px-2 py-0.5 rounded-lg transition-all duration-200 border whitespace-nowrap",
+                    active
+                      ? "bg-teal-400/25 border-teal-300/50 text-teal-200 font-medium shadow-[0_0_8px_rgba(45,212,191,0.25)]"
+                      : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white hover:bg-white/[0.08]"
+                  )}
+                  title={`Preset ${p.label}`}
+                >
+                  <span>{p.icon}</span>
+                  <span>{p.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={onCycleSpeed}
+              className={cn(
+                "px-2 py-0.5 rounded-lg border text-[10px] font-mono transition-all",
+                (playerState?.speed ?? 1.0) !== 1.0
+                  ? "bg-purple-500/20 border-purple-400/40 text-purple-200 shadow-[0_0_8px_rgba(168,85,247,0.25)]"
+                  : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white"
+              )}
+              title="Cambiar velocidad de reproducción"
+            >
+              {(playerState?.speed ?? 1.0).toFixed(2)}x
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
+interface NowPlayingMiniDockProps {
+  playerState: PlayerState | null;
+  isTrackLoading: boolean;
+  isPlaying: boolean;
+  dragPosition: number | null;
+  onTogglePlayback: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onSeekPreview: (position: number) => void;
+  onSeekCommit: (position: number) => void;
+  onCloseLyrics: () => void;
+}
+
+const NowPlayingMiniDock = React.memo(function NowPlayingMiniDock({
+  playerState,
+  isTrackLoading,
+  isPlaying,
+  dragPosition,
+  onTogglePlayback,
+  onPrevious,
+  onNext,
+  onSeekPreview,
+  onSeekCommit,
+  onCloseLyrics,
+}: NowPlayingMiniDockProps) {
+  const current = playerState?.current;
+  const duration = safeDuration(playerState?.duration_seconds ?? 0);
+  const position = safePosition(
+    dragPosition ?? playerState?.position_seconds ?? 0,
+    duration,
+  );
+  const [albumColor, setAlbumColor] = useState<string | null>(null);
+
+  useEffect(() => {
+    const url = current?.thumbnail_url;
+    if (!url) {
+      setAlbumColor(null);
+      return;
+    }
+    extractDominantColor(url).then(setAlbumColor);
+  }, [current?.thumbnail_url]);
+
+  if (!current && !isTrackLoading) return null;
+
+  return (
+    <div
+      className="liquid-card relative mt-auto flex flex-col overflow-hidden rounded-2xl border border-white/10 shadow-xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-200"
+      role="region"
+      aria-label="Reproductor compacto de letras"
+    >
+      {/* Barra de progreso interactiva fina superior */}
+      {current && (
+        <div className="relative px-2 pt-1 pb-0.5">
+          <Slider
+            className="h-1 cursor-pointer"
+            value={[position]}
+            max={Math.max(duration, 1)}
+            step={1}
+            variant="glass"
+            onValueChange={([value]) => onSeekPreview(value)}
+            onValueCommit={([value]) => onSeekCommit(value)}
+            aria-label="Posición de reproducción"
+          />
+        </div>
+      )}
+
+      <div className="flex items-center gap-2.5 px-3 py-1.5">
+        {/* Carátula */}
+        <div className="relative size-8 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-white/5">
+          {current?.thumbnail_url ? (
+            <img
+              src={current.thumbnail_url}
+              alt=""
+              className="size-full object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLElement).style.display = "none";
+              }}
+            />
+          ) : (
+            <div className="flex size-full items-center justify-center bg-teal-500/10">
+              <Headphones className="size-4 text-teal-300" />
+            </div>
+          )}
         </div>
 
+        {/* Título y Artista */}
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
+          <div className="flex items-center gap-1.5">
+            <span
+              className="size-1.5 shrink-0 rounded-full transition-all"
+              style={{
+                backgroundColor: isPlaying ? (albumColor ?? "#2dd4bf") : undefined,
+                boxShadow: isPlaying ? `0 0 6px ${albumColor ?? "#2dd4bf"}` : undefined,
+                animation: isPlaying ? "pulse 2s infinite" : undefined,
+              }}
+            />
+            <p className="truncate text-xs font-semibold text-white/95">
+              {current?.title || (isTrackLoading ? "Cargando pista..." : "Sin reproducción")}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 pl-3">
+            <p className="truncate text-[10px] text-white/50">
+              {current?.artist || "Cadence"}
+            </p>
+            <span className="text-[9px] tabular-nums text-white/40 shrink-0">
+              {formatDuration(position)} / {formatDuration(duration)}
+            </span>
+          </div>
+        </div>
+
+        {/* Controles de reproducción rápida */}
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={onCycleSpeed}
-            className={cn(
-              "px-2 py-0.5 rounded-lg border text-[10px] font-mono transition-all",
-              (playerState?.speed ?? 1.0) !== 1.0
-                ? "bg-purple-500/20 border-purple-400/40 text-purple-200 shadow-[0_0_8px_rgba(168,85,247,0.25)]"
-                : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white"
-            )}
-            title="Cambiar velocidad de reproducción"
+          <GlassButton
+            variant="ghost"
+            size="sm"
+            aria-label="Pista anterior (P)"
+            title="Pista anterior (P)"
+            onClick={onPrevious}
+            className="border-white/5 hover:bg-white/[0.1] hover:text-white"
           >
-            {(playerState?.speed ?? 1.0).toFixed(2)}x
-          </button>
+            <SkipBack className="size-3 fill-current" />
+          </GlassButton>
+
+          <GlassButton
+            variant="primary"
+            size="sm"
+            aria-label={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+            title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+            onClick={onTogglePlayback}
+          >
+            {isPlaying ? (
+              <Pause className="size-3.5 fill-current" />
+            ) : (
+              <Play className="size-3.5 ml-0.5 fill-current" />
+            )}
+          </GlassButton>
+
+          <GlassButton
+            variant="ghost"
+            size="sm"
+            aria-label="Siguiente pista (N)"
+            title="Siguiente pista (N)"
+            onClick={onNext}
+            className="border-white/5 hover:bg-white/[0.1] hover:text-white"
+          >
+            <SkipForward className="size-3 fill-current" />
+          </GlassButton>
+
+          <GlassButton
+            variant="ghost"
+            size="sm"
+            aria-label="Cerrar letras y volver a biblioteca (Esc)"
+            title="Cerrar letras (Esc)"
+            onClick={onCloseLyrics}
+            className="border-white/5 hover:bg-white/[0.1] hover:text-white text-indigo-300 ml-0.5"
+          >
+            <ChevronDown className="size-4" />
+          </GlassButton>
         </div>
       </div>
     </div>
@@ -1538,8 +1722,8 @@ function App() {
           </div>
         </header>
 
-        {/* Buscador de vidrio líquido — se oculta en Focus para dejar sitio al estudio */}
-        {!isFocusView && (
+        {/* Buscador de vidrio líquido — se oculta en Focus y en Letras para maximizar espacio */}
+        {!isFocusView && !isLyricsOpen && (
         <div className="relative flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
@@ -1808,7 +1992,7 @@ function App() {
           </>
         )}
 
-        {/* Música: dock compacto en Focus, reproductor completo en Biblioteca */}
+        {/* Música: dock compacto en Focus y Letras, reproductor completo en Biblioteca */}
         {isFocusView ? (
           <FocusNowPlayingDock
             playerState={playerState}
@@ -1817,6 +2001,19 @@ function App() {
             onTogglePlayback={handleTogglePlayback}
             onNext={handleNext}
             onOpenLibrary={() => setIsFocusView(false)}
+          />
+        ) : isLyricsOpen ? (
+          <NowPlayingMiniDock
+            playerState={playerState}
+            isTrackLoading={isTrackLoading}
+            isPlaying={isPlaying}
+            dragPosition={dragPosition}
+            onTogglePlayback={handleTogglePlayback}
+            onPrevious={handlePrevious}
+            onNext={handleNext}
+            onSeekPreview={setDragPosition}
+            onSeekCommit={handleSeekCommit}
+            onCloseLyrics={() => setIsLyricsOpen(false)}
           />
         ) : (
           (isTrackLoading || playerState?.current) && (

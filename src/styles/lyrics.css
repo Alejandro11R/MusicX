@@ -2,17 +2,22 @@
    Apple Music Liquid-Glass Lyrics Engine CSS
    GPU-compositor driven: translate3d + opacity + scale
    Zero heavy repaints, zero nested backdrop-filters per line
+   Adaptive Responsive Engine: Container Queries (cqh / cqw)
    ============================================================ */
 
 .lyrics-container {
   position: relative;
   width: 100%;
   height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   user-select: none;
-  background-color: rgba(10, 10, 14, 0.85);
+  background-color: rgba(10, 10, 14, 0.88);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 /* Dynamic Ambient Liquid Aura (Mesh Gradient) */
@@ -28,39 +33,39 @@
 
 .lyrics-aura-blob-1 {
   position: absolute;
-  width: 75vw;
-  height: 75vh;
-  top: -20%;
+  width: 60vw;
+  height: 60vh;
+  top: -15%;
   left: -10%;
   border-radius: 50%;
   background: radial-gradient(circle, var(--palette-primary, rgba(99, 102, 241, 0.45)) 0%, transparent 65%);
-  filter: blur(80px);
+  filter: blur(55px);
   will-change: transform;
   animation: auraFloat1 18s ease-in-out infinite alternate;
 }
 
 .lyrics-aura-blob-2 {
   position: absolute;
-  width: 70vw;
-  height: 70vh;
-  bottom: -20%;
+  width: 55vw;
+  height: 55vh;
+  bottom: -15%;
   right: -10%;
   border-radius: 50%;
   background: radial-gradient(circle, var(--palette-secondary, rgba(168, 85, 247, 0.38)) 0%, transparent 65%);
-  filter: blur(85px);
+  filter: blur(60px);
   will-change: transform;
   animation: auraFloat2 22s ease-in-out infinite alternate;
 }
 
 .lyrics-aura-blob-3 {
   position: absolute;
-  width: 50vw;
-  height: 50vh;
-  top: 30%;
-  right: 15%;
+  width: 45vw;
+  height: 45vh;
+  top: 25%;
+  right: 10%;
   border-radius: 50%;
   background: radial-gradient(circle, var(--palette-ambient, rgba(236, 72, 153, 0.28)) 0%, transparent 70%);
-  filter: blur(90px);
+  filter: blur(65px);
   will-change: transform;
   animation: auraFloat3 16s ease-in-out infinite alternate;
 }
@@ -98,8 +103,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.5rem;
-  background: linear-gradient(to bottom, rgba(10, 10, 14, 0.7) 0%, rgba(10, 10, 14, 0) 100%);
+  padding: 0.65rem 0.95rem;
+  background: linear-gradient(to bottom, rgba(10, 10, 14, 0.75) 0%, rgba(10, 10, 14, 0) 100%);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -108,13 +113,13 @@
 .lyrics-track-info {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.65rem;
   min-width: 0;
 }
 
 .lyrics-track-thumb {
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   border-radius: 8px;
   object-fit: cover;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
@@ -126,7 +131,7 @@
 }
 
 .lyrics-track-title {
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   font-weight: 600;
   color: #ffffff;
   white-space: nowrap;
@@ -135,7 +140,7 @@
 }
 
 .lyrics-track-artist {
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   color: rgba(255, 255, 255, 0.65);
   white-space: nowrap;
   overflow: hidden;
@@ -145,21 +150,27 @@
 .lyrics-tools {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.45rem;
 }
 
 .lyrics-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.75rem;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
   border-radius: 9999px;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 500;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(8px);
+}
+
+@media (max-width: 440px) {
+  .lyrics-pill {
+    display: none;
+  }
 }
 
 .lyrics-btn-icon {
@@ -186,33 +197,37 @@
   transform: scale(0.95);
 }
 
-/* Scroll Viewport with Top & Bottom Fade Mask */
+/* Scroll Viewport with Top & Bottom Fade Mask & Container Queries */
 .lyrics-viewport {
   position: relative;
   z-index: 5;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 2rem;
+  padding: 0 1.25rem;
   scroll-behavior: smooth;
+  overscroll-behavior: contain;
+  container-type: size;
+  container-name: lyrics;
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0%,
-    rgba(0, 0, 0, 1) 12%,
-    rgba(0, 0, 0, 1) 85%,
+    rgba(0, 0, 0, 1) 8%,
+    rgba(0, 0, 0, 1) 90%,
     transparent 100%
   );
   mask-image: linear-gradient(
     to bottom,
     transparent 0%,
-    rgba(0, 0, 0, 1) 12%,
-    rgba(0, 0, 0, 1) 85%,
+    rgba(0, 0, 0, 1) 8%,
+    rgba(0, 0, 0, 1) 90%,
     transparent 100%
   );
 }
 
 .lyrics-viewport::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 
 .lyrics-viewport::-webkit-scrollbar-thumb {
@@ -224,31 +239,37 @@
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* Lines Stack (Spacer at start/end so active line centers properly) */
+/* Lines Stack: Adaptive Centering with Container Query Height */
 .lyrics-stack {
   display: flex;
   flex-direction: column;
-  padding: 38vh 0;
-  gap: 1.6rem;
-  max-width: 720px;
+  padding: calc(50cqh - 1.6rem) 0;
+  gap: 1.1rem;
+  max-width: 680px;
   margin: 0 auto;
 }
 
-/* Individual Line Item (Apple Music fluid spring transition) */
+@supports not (height: 1cqh) {
+  .lyrics-stack {
+    padding: 30vh 0;
+  }
+}
+
+/* Individual Line Item (Fluid clamp font size + Apple Music spring transition) */
 .lyric-line-item {
   position: relative;
-  font-size: 1.65rem;
-  line-height: 1.35;
+  font-size: clamp(1.1rem, 3.2cqw, 1.35rem);
+  line-height: 1.45;
   font-weight: 600;
-  letter-spacing: -0.015em;
-  padding: 0.4rem 0.8rem;
-  border-radius: 12px;
+  letter-spacing: -0.012em;
+  padding: 0.35rem 0.65rem;
+  border-radius: 10px;
   transform-origin: left center;
   transition:
-    transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 350ms ease,
-    filter 350ms ease,
-    color 300ms ease;
+    transform 380ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 300ms ease,
+    filter 300ms ease,
+    color 250ms ease;
   will-change: transform, opacity, filter;
   cursor: pointer;
 }
@@ -256,27 +277,27 @@
 /* Past lines */
 .lyric-line-past {
   color: rgba(255, 255, 255, 0.32);
-  transform: scale(0.97);
-  filter: blur(0.4px);
+  transform: scale(0.98);
+  filter: blur(0.3px);
 }
 
 /* Active Line (Apple Music Bright Highlight + Soft Aura Glow) */
 .lyric-line-active {
   color: #ffffff;
   font-weight: 700;
-  transform: scale(1.05) translateX(4px);
+  transform: translateX(4px);
   filter: none;
   opacity: 1;
   text-shadow:
-    0 0 18px rgba(255, 255, 255, 0.5),
-    0 0 35px var(--palette-primary, rgba(99, 102, 241, 0.4));
+    0 0 16px rgba(255, 255, 255, 0.5),
+    0 0 30px var(--palette-primary, rgba(99, 102, 241, 0.4));
 }
 
 /* Future lines */
 .lyric-line-future {
   color: rgba(255, 255, 255, 0.45);
-  transform: scale(0.97);
-  filter: blur(0.4px);
+  transform: scale(0.98);
+  filter: blur(0.3px);
 }
 
 /* Hover: Line preview with quick seek affordance */
@@ -303,21 +324,21 @@
 /* Floating Resume Auto-Scroll Button */
 .lyrics-resume-scroll-btn {
   position: absolute;
-  bottom: 2rem;
-  right: 2rem;
+  bottom: 1rem;
+  right: 1.25rem;
   z-index: 15;
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1.1rem;
+  gap: 0.45rem;
+  padding: 0.45rem 0.85rem;
   border-radius: 9999px;
-  background: rgba(30, 30, 40, 0.85);
+  background: rgba(30, 30, 40, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #ffffff;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   font-weight: 600;
   backdrop-filter: blur(16px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   cursor: pointer;
   transition: all 200ms ease;
   animation: fadeIn 250ms ease;
@@ -326,7 +347,7 @@
 .lyrics-resume-scroll-btn:hover {
   background: rgba(45, 45, 60, 0.95);
   transform: translateY(-2px);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
 }
 
 @keyframes fadeIn {
@@ -341,26 +362,39 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  gap: 1rem;
+  gap: 0.85rem;
   color: rgba(255, 255, 255, 0.6);
   text-align: center;
-  padding: 2rem;
+  padding: 1.5rem;
 }
 
 .lyrics-empty-icon {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
   color: rgba(255, 255, 255, 0.3);
 }
 
 .lyrics-empty-title {
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.85);
 }
 
 .lyrics-empty-desc {
-  font-size: 0.88rem;
-  max-width: 360px;
-  line-height: 1.5;
+  font-size: 0.82rem;
+  max-width: 320px;
+  line-height: 1.45;
+}
+
+/* Extra small height adaptations */
+@media (max-height: 500px) {
+  .lyrics-track-artist {
+    display: none;
+  }
+  .lyrics-header {
+    padding: 0.4rem 0.75rem;
+  }
+  .lyrics-stack {
+    gap: 0.85rem;
+  }
 }

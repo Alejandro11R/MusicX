@@ -237,31 +237,31 @@ export function LyricsPanel({
             className="lyrics-btn-icon"
             title="Cerrar letras"
           >
-            <X className="w-4.5 h-4.5" />
+            <X className="size-4" />
           </button>
         </div>
       </header>
 
       {/* Floating Offset Adjuster Bar */}
       {showOffsetControls && isSynced && (
-        <div className="relative z-10 flex items-center justify-center gap-3 py-2 px-4 bg-black/40 backdrop-blur-md border-b border-white/5 animate-in fade-in duration-200">
-          <span className="text-xs text-white/70">Ajuste de tiempo:</span>
+        <div className="relative z-10 flex items-center justify-center gap-2 py-1.5 px-3 bg-black/40 backdrop-blur-md border-b border-white/5 animate-in fade-in duration-200">
+          <span className="text-[11px] text-white/70">Offset:</span>
           <button
             onClick={() => setUserOffsetMs((prev) => prev - 250)}
-            className="px-2.5 py-1 text-xs rounded-md bg-white/10 hover:bg-white/20 text-white flex items-center gap-1 transition"
+            className="px-2 py-0.5 text-[11px] rounded bg-white/10 hover:bg-white/20 text-white flex items-center gap-0.5 transition"
           >
             <Minus className="w-3 h-3" /> 250ms
           </button>
           <span
             onClick={() => setUserOffsetMs(0)}
-            className="text-xs font-mono px-2 py-0.5 rounded bg-white/5 text-white/90 cursor-pointer hover:bg-white/10 transition"
+            className="text-[11px] font-mono px-2 py-0.5 rounded bg-white/5 text-white/90 cursor-pointer hover:bg-white/10 transition"
             title="Haz clic para reiniciar a 0"
           >
             {userOffsetMs > 0 ? `+${userOffsetMs}` : userOffsetMs} ms
           </span>
           <button
             onClick={() => setUserOffsetMs((prev) => prev + 250)}
-            className="px-2.5 py-1 text-xs rounded-md bg-white/10 hover:bg-white/20 text-white flex items-center gap-1 transition"
+            className="px-2 py-0.5 text-[11px] rounded bg-white/10 hover:bg-white/20 text-white flex items-center gap-0.5 transition"
           >
             <Plus className="w-3 h-3" /> 250ms
           </button>
@@ -355,39 +355,39 @@ export function LyricsPanel({
 
       {/* Manual Search Modal */}
       {showSearchModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
-          <div className="w-full max-w-lg bg-[#14141e] border border-white/10 rounded-2xl p-6 shadow-2xl flex flex-col max-h-[80vh]">
-            <div className="flex items-center justify-between pb-4 border-b border-white/10">
-              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <Search className="w-5 h-5 text-indigo-400" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/70 backdrop-blur-md">
+          <div className="w-full max-w-[380px] bg-[#14141e] border border-white/10 rounded-2xl p-4 shadow-2xl flex flex-col max-h-[82vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Search className="size-4 text-indigo-400" />
                 Buscar letra alternativa
               </h3>
               <button
                 onClick={() => setShowSearchModal(false)}
                 className="p-1 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition"
               >
-                <X className="w-5 h-5" />
+                <X className="size-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSearchSubmit} className="mt-4 flex gap-2">
+            <form onSubmit={handleSearchSubmit} className="mt-3 flex gap-2">
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Título o Artista..."
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-white placeholder-white/40 focus:outline-none focus:border-indigo-500 transition"
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-white/40 focus:outline-none focus:border-indigo-500 transition"
                 autoFocus
               />
               <button
                 type="submit"
                 disabled={isSearching}
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg font-medium transition flex items-center gap-2"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition flex items-center gap-1.5"
               >
                 {isSearching ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
-                  <Search className="w-4 h-4" />
+                  <Search className="size-3.5" />
                 )}
                 Buscar
               </button>
