@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import {
   Clock,
+  Coffee,
   Headphones,
   Link2,
   ListMusic,
@@ -17,10 +18,12 @@ import {
   Play,
   Plus,
   Repeat,
+  RotateCcw,
   Search,
   SkipBack,
   SkipForward,
   Square,
+  Timer,
   Volume2,
   VolumeX,
   X,
@@ -49,6 +52,14 @@ import {
   removeFromQueue,
   clearQueue,
   playQueueIndex,
+  setAudioPreset,
+  setSpeed,
+  startFocus,
+  pauseFocus,
+  resetFocus,
+  skipFocus,
+  getFocusState,
+  listenFocusEvents,
   getState,
   health,
   quit,
@@ -58,6 +69,8 @@ import {
   type SearchResult,
   type OrchestratorEvent,
   type QueueItem,
+  type AudioPreset,
+  type FocusState,
 } from "./lib/tauri";
 
 const POLL_INTERVAL_MS = 5000; // Fallback polling every 5s
@@ -372,6 +385,106 @@ const QueuePanel = React.memo(function QueuePanel({
   );
 });
 
+const AUDIO_PRESETS: { id: AudioPreset; label: string; icon: string }[] = [
+  { id: "normal", label: "Normal", icon: "✨" },
+  { id: "lofi", label: "Lo-Fi", icon: "☕" },
+  { id: "bass_boost", label: "Bass", icon: "🔊" },
+  { id: "loudnorm", label: "Loudnorm", icon: "⚖️" },
+  { id: "slowed_reverb", label: "Slowed", icon: "🌙" },
+  { id: "nightcore", label: "Nightcore", icon: "⚡" },
+];
+
+interface FocusWidgetProps {
+  focusState: FocusState | null;
+  onStart: () => void;
+  onPause: () => void;
+  onReset: () => void;
+  onSkip: () => void;
+}
+
+const FocusWidget = React.memo(function FocusWidget({
+  focusState,
+  onStart,
+  onPause,
+  onReset,
+  onSkip,
+}: FocusWidgetProps) {
+  if (!focusState) return null;
+
+  const isRunning = focusState.is_running;
+  const mins = Math.floor(focusState.remaining_seconds / 60);
+  const secs = focusState.remaining_seconds % 60;
+  const timeFormatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+
+  const isBreak = focusState.phase === "short_break" || focusState.phase === "long_break";
+  const label =
+    focusState.phase === "focus"
+      ? "Focus"
+      : focusState.phase === "short_break"
+      ? "Descanso"
+      : focusState.phase === "long_break"
+      ? "Descanso +"
+      : "Focus";
+
+  return (
+    <div
+      className={cn(
+        "group flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] transition-all duration-300 border select-none",
+        isRunning
+          ? isBreak
+            ? "bg-amber-500/15 border-amber-400/40 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.25)]"
+            : "bg-teal-500/15 border-teal-400/40 text-teal-200 shadow-[0_0_12px_rgba(45,212,191,0.25)]"
+          : "bg-white/[0.04] border-white/10 text-white/60 hover:text-white/80 hover:bg-white/[0.08]"
+      )}
+    >
+      <span className="flex items-center gap-1 font-medium">
+        {isBreak ? <Coffee className="size-3 text-amber-300" /> : <Timer className="size-3 text-teal-300" />}
+        <span>{label}</span>
+      </span>
+
+      <span className="font-mono text-xs font-semibold tabular-nums text-white/95">
+        {timeFormatted}
+      </span>
+
+      <div className="flex items-center gap-1 pl-1">
+        <button
+          type="button"
+          onClick={isRunning ? onPause : onStart}
+          className="hover:scale-110 active:scale-95 transition-transform"
+          aria-label={isRunning ? "Pausar sesión de enfoque (F)" : "Iniciar sesión de enfoque (F)"}
+          title={isRunning ? "Pausar sesión (F)" : "Iniciar sesión de 25 min (F)"}
+        >
+          {isRunning ? <Pause className="size-3 fill-current" /> : <Play className="size-3 fill-current ml-0.5" />}
+        </button>
+
+        {isRunning && (
+          <button
+            type="button"
+            onClick={onSkip}
+            className="hover:scale-110 active:scale-95 transition-transform text-white/50 hover:text-white"
+            aria-label="Saltar a siguiente fase"
+            title="Saltar fase"
+          >
+            <SkipForward className="size-3 fill-current" />
+          </button>
+        )}
+
+        {focusState.phase !== "idle" && (
+          <button
+            type="button"
+            onClick={onReset}
+            className="hover:scale-110 active:scale-95 transition-transform text-white/40 hover:text-rose-300"
+            aria-label="Reiniciar temporizador"
+            title="Reiniciar temporizador"
+          >
+            <RotateCcw className="size-3" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 interface NowPlayingProps {
   playerState: PlayerState | null;
   isTrackLoading: boolean;
@@ -386,6 +499,8 @@ interface NowPlayingProps {
   onToggleQueue: () => void;
   isQueueOpen: boolean;
   queueCount: number;
+  onSelectPreset: (preset: AudioPreset) => void;
+  onCycleSpeed: () => void;
   /** Solo mueve el thumb; no llama al backend hasta soltar. */
   onSeekPreview: (position: number) => void;
   /** Confirma el seek al soltar el slider. */
@@ -418,6 +533,8 @@ const NowPlaying = React.memo(function NowPlaying({
   onVolumeCommit,
   onToggleMute,
   volume,
+  onSelectPreset,
+  onCycleSpeed,
 }: NowPlayingProps) {
   const current = playerState?.current;
   const duration = safeDuration(playerState?.duration_seconds ?? 0);
@@ -628,6 +745,48 @@ const NowPlaying = React.memo(function NowPlaying({
           {volume}
         </span>
       </div>
+
+      {/* Audio FX Presets & Velocidad */}
+      <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-white/5 text-[10px]">
+        <div className="flex items-center gap-1 overflow-x-auto py-0.5 no-scrollbar">
+          {AUDIO_PRESETS.map((p) => {
+            const active = (playerState?.audio_preset ?? "normal") === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => onSelectPreset(p.id)}
+                className={cn(
+                  "flex items-center gap-1 px-2 py-0.5 rounded-lg transition-all duration-200 border whitespace-nowrap",
+                  active
+                    ? "bg-teal-400/25 border-teal-300/50 text-teal-200 font-medium shadow-[0_0_8px_rgba(45,212,191,0.25)]"
+                    : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white hover:bg-white/[0.08]"
+                )}
+                title={`Preset ${p.label}`}
+              >
+                <span>{p.icon}</span>
+                <span>{p.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={onCycleSpeed}
+            className={cn(
+              "px-2 py-0.5 rounded-lg border text-[10px] font-mono transition-all",
+              (playerState?.speed ?? 1.0) !== 1.0
+                ? "bg-purple-500/20 border-purple-400/40 text-purple-200 shadow-[0_0_8px_rgba(168,85,247,0.25)]"
+                : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white"
+            )}
+            title="Cambiar velocidad de reproducción"
+          >
+            {(playerState?.speed ?? 1.0).toFixed(2)}x
+          </button>
+        </div>
+      </div>
     </div>
   );
 });
@@ -648,6 +807,7 @@ function App() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [prevVolume, setPrevVolume] = useState<number>(100);
+  const [focusState, setFocusState] = useState<FocusState | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const playerStateRef = useRef<PlayerState | null>(null);
   const prevVolumeRef = useRef<number>(100);
@@ -676,8 +836,10 @@ function App() {
       console.error("Error al cargar historial:", e);
     }
 
-    // Cargar cola inicial
+    // Cargar cola inicial y focus
     getQueue().then(setQueue).catch(console.error);
+    getFocusState().then(setFocusState).catch(console.error);
+    const unlistenFocusPromise = listenFocusEvents(setFocusState);
 
     // Health check inicial
     health()
@@ -712,6 +874,7 @@ function App() {
     return () => {
       clearInterval(interval);
       unlistenRef.current?.();
+      unlistenFocusPromise.then((unlisten) => unlisten()).catch(console.error);
     };
   }, []);
 
@@ -752,6 +915,12 @@ function App() {
         break;
       case "QueueUpdated":
         setQueue(event.data);
+        break;
+      case "AudioPresetChanged":
+        setPlayerState((prev) => (prev ? { ...prev, audio_preset: event.data } : prev));
+        break;
+      case "SpeedChanged":
+        setPlayerState((prev) => (prev ? { ...prev, speed: event.data } : prev));
         break;
       case "PlaybackError":
         setError(event.data);
@@ -815,6 +984,59 @@ function App() {
     }
   }, []);
 
+  const handleStartFocus = useCallback(async () => {
+    try {
+      await startFocus();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handlePauseFocus = useCallback(async () => {
+    try {
+      await pauseFocus();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handleResetFocus = useCallback(async () => {
+    try {
+      await resetFocus();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handleSkipFocus = useCallback(async () => {
+    try {
+      await skipFocus();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handleSelectPreset = useCallback(async (preset: AudioPreset) => {
+    setPlayerState((prev) => (prev ? { ...prev, audio_preset: preset } : prev));
+    try {
+      await setAudioPreset(preset);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handleCycleSpeed = useCallback(async () => {
+    const curSpeed = playerStateRef.current?.speed ?? 1.0;
+    const nextSpeed =
+      curSpeed === 1.0 ? 1.15 : curSpeed === 1.15 ? 1.25 : curSpeed === 1.25 ? 0.85 : 1.0;
+    setPlayerState((prev) => (prev ? { ...prev, speed: nextSpeed } : prev));
+    try {
+      await setSpeed(nextSpeed);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
   const isYoutubeUrl = useMemo(() => {
     const t = query.trim();
     return (
@@ -849,6 +1071,13 @@ function App() {
       } else if (!isSearchFocused && (e.key === "q" || e.key === "Q")) {
         e.preventDefault();
         setIsQueueOpen((prev) => !prev);
+      } else if (!isSearchFocused && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        if (focusState?.is_running) {
+          handlePauseFocus();
+        } else {
+          handleStartFocus();
+        }
       } else if (!isSearchFocused && e.key.toLowerCase() === "m") {
         e.preventDefault();
         handleToggleMute();
@@ -865,7 +1094,16 @@ function App() {
     }
     document.addEventListener("keydown", handleGlobalKeyDown);
     return () => document.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [handleNext, handlePrevious, handleToggleLoop, handleToggleMute, handleTogglePlayback]);
+  }, [
+    focusState?.is_running,
+    handleNext,
+    handlePauseFocus,
+    handlePrevious,
+    handleStartFocus,
+    handleToggleLoop,
+    handleToggleMute,
+    handleTogglePlayback,
+  ]);
 
   function saveToRecent(track: SearchResult) {
     setRecentTracks((prev) => {
@@ -1115,6 +1353,14 @@ function App() {
               </span>
             )}
           </div>
+
+          <FocusWidget
+            focusState={focusState}
+            onStart={handleStartFocus}
+            onPause={handlePauseFocus}
+            onReset={handleResetFocus}
+            onSkip={handleSkipFocus}
+          />
 
           <div className="flex items-center gap-1.5">
             <GlassButton variant="ghost" size="sm" aria-label="Minimizar" onClick={() => getCurrentWindow().minimize()}>
@@ -1377,6 +1623,8 @@ function App() {
             onVolumeCommit={handleVolumeCommit}
             onToggleMute={handleToggleMute}
             volume={volume}
+            onSelectPreset={handleSelectPreset}
+            onCycleSpeed={handleCycleSpeed}
           />
         )}
       </GlassPanel>

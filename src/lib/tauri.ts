@@ -8,6 +8,25 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 export type PlaybackStatus = "Stopped" | "Loading" | "Playing" | "Paused";
 
+export type AudioPreset =
+  | "normal"
+  | "lofi"
+  | "bass_boost"
+  | "loudnorm"
+  | "slowed_reverb"
+  | "nightcore";
+
+export type FocusPhase = "idle" | "focus" | "short_break" | "long_break";
+
+export interface FocusState {
+  phase: FocusPhase;
+  remaining_seconds: number;
+  total_seconds: number;
+  is_running: boolean;
+  sessions_completed: number;
+  auto_pause_on_break: boolean;
+}
+
 export interface SearchResult {
   id: string;
   title: string;
@@ -25,6 +44,8 @@ export interface PlayerState {
   looping: boolean;
   /** false mientras el backend está reconectando con mpv. */
   connected: boolean;
+  audio_preset?: AudioPreset;
+  speed?: number;
 }
 
 export interface HealthStatus {
@@ -46,6 +67,8 @@ export type OrchestratorEvent =
   | { type: "StateChanged"; data: PlaybackStatus }
   | { type: "ConnectionChanged"; data: { connected: boolean } }
   | { type: "QueueUpdated"; data: QueueItem[] }
+  | { type: "AudioPresetChanged"; data: AudioPreset }
+  | { type: "SpeedChanged"; data: number }
   | { type: "Progress"; data: { position_seconds: number; duration_seconds: number } };
 
 export function search(query: string, limit: number): Promise<SearchResult[]> {
@@ -110,6 +133,42 @@ export function clearQueue(): Promise<void> {
 
 export function playQueueIndex(index: number): Promise<void> {
   return invoke("play_queue_index", { index });
+}
+
+export function setAudioPreset(preset: AudioPreset): Promise<void> {
+  return invoke("set_audio_preset", { preset });
+}
+
+export function setSpeed(speed: number): Promise<void> {
+  return invoke("set_speed", { speed });
+}
+
+export function startFocus(): Promise<void> {
+  return invoke("start_focus");
+}
+
+export function pauseFocus(): Promise<void> {
+  return invoke("pause_focus");
+}
+
+export function resetFocus(): Promise<void> {
+  return invoke("reset_focus");
+}
+
+export function skipFocus(): Promise<void> {
+  return invoke("skip_focus");
+}
+
+export function getFocusState(): Promise<FocusState> {
+  return invoke("get_focus_state");
+}
+
+export function setFocusAutoPause(enabled: boolean): Promise<void> {
+  return invoke("set_focus_auto_pause", { enabled });
+}
+
+export function listenFocusEvents(callback: (state: FocusState) => void): Promise<UnlistenFn> {
+  return listen<FocusState>("focus-state-changed", (e) => callback(e.payload));
 }
 
 export function getState(): Promise<PlayerState> {

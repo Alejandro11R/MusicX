@@ -52,6 +52,14 @@ impl PlaybackController {
         self.mpv.set_loop(enabled).await
     }
 
+    pub async fn set_audio_filter(&self, filter: &str) -> Result<(), CadenceError> {
+        self.mpv.set_audio_filter(filter).await
+    }
+
+    pub async fn set_speed(&self, speed: f64) -> Result<(), CadenceError> {
+        self.mpv.set_speed(speed).await
+    }
+
     /// Obtiene estado instantáneo (sin IPC).
     pub fn status(&self) -> MpvStatus {
         self.mpv.status()
@@ -122,6 +130,8 @@ pub enum OrchestratorEvent {
     StateChanged(PlayerMode),
     ConnectionChanged { connected: bool },
     QueueUpdated(Vec<QueueItem>),
+    AudioPresetChanged(crate::models::player_state::AudioPreset),
+    SpeedChanged(f64),
     /// Tick periódico para mover la barra de progreso sin polling desde el
     /// frontend (2 Hz).
     Progress {
@@ -167,6 +177,8 @@ pub struct PlayerOrchestrator {
     queue: RwLock<Vec<QueueItem>>,
     current_queue_index: RwLock<Option<usize>>,
     queue_id_counter: AtomicU64,
+    desired_audio_preset: RwLock<crate::models::player_state::AudioPreset>,
+    desired_speed: AtomicU64,
     mpv_events: broadcast::Receiver<MpvEvent>,
     _mpv_status_rx: watch::Receiver<MpvStatus>,
 }
@@ -202,6 +214,8 @@ impl PlayerOrchestrator {
             queue: RwLock::new(Vec::new()),
             current_queue_index: RwLock::new(None),
             queue_id_counter: AtomicU64::new(1),
+            desired_audio_preset: RwLock::new(crate::models::player_state::AudioPreset::Normal),
+            desired_speed: AtomicU64::new(1.0f64.to_bits()),
             mpv_events,
             _mpv_status_rx: mpv_status_rx,
         }
@@ -468,6 +482,12 @@ impl PlayerOrchestrator {
         self.controller
             .set_loop(self.desired_loop.load(Ordering::SeqCst))
             .await?;
+        let preset = *self.desired_audio_preset.read().await;
+        let _ = self.apply_preset_filter(preset).await;
+        let speed = load_f64(&self.desired_speed);
+        if (speed - 1.0).abs() > f64::EPSILON {
+            let _ = self.controller.set_speed(speed).await;
+        }
         Ok(())
     }
 
@@ -767,7 +787,53 @@ impl PlayerOrchestrator {
             volume: load_f64(&self.desired_volume),
             looping: self.desired_loop.load(Ordering::SeqCst),
             connected: mpv_status.connected,
+            audio_preset: *self.desired_audio_preset.read().await,
+            speed: load_f64(&self.desired_speed),
         }
+    }
+
+    pub async fn set_audio_preset(
+        &self,
+        preset: crate::models::player_state::AudioPreset,
+    ) -> Result<(), CadenceError> {
+        *self.desired_audio_preset.write().await = preset;
+        self.apply_preset_filter(preset).await?;
+        let _ = self
+            .event_tx
+            .send(OrchestratorEvent::AudioPresetChanged(preset));
+        Ok(())
+    }
+
+    pub async fn set_speed(&self, speed: f64) -> Result<(), CadenceError> {
+        let speed = speed.clamp(0.5, 2.0);
+        store_f64(&self.desired_speed, speed);
+        self.controller.set_speed(speed).await?;
+        let _ = self.event_tx.send(OrchestratorEvent::SpeedChanged(speed));
+        Ok(())
+    }
+
+    pub async fn get_audio_preset(&self) -> crate::models::player_state::AudioPreset {
+        *self.desired_audio_preset.read().await
+    }
+
+    pub fn get_speed(&self) -> f64 {
+        load_f64(&self.desired_speed)
+    }
+
+    async fn apply_preset_filter(
+        &self,
+        preset: crate::models::player_state::AudioPreset,
+    ) -> Result<(), CadenceError> {
+        use crate::models::player_state::AudioPreset;
+        let filter = match preset {
+            AudioPreset::Normal => "dynaudnorm",
+            AudioPreset::Lofi => "lavfi=[highpass=f=200,lowpass=f=4000]",
+            AudioPreset::BassBoost => "lavfi=[equalizer=f=60:width_type=h:width=50:g=10]",
+            AudioPreset::Loudnorm => "lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]",
+            AudioPreset::SlowedReverb => "lavfi=[aecho=0.8:0.88:60:0.4]",
+            AudioPreset::Nightcore => "lavfi=[asetrate=44100*1.2,atempo=1.05]",
+        };
+        self.controller.set_audio_filter(filter).await
     }
 
     /// Suscribe a eventos del orquestador.

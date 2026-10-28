@@ -11,6 +11,18 @@ pub enum PlaybackStatus {
     Paused,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioPreset {
+    #[default]
+    Normal,
+    Lofi,
+    BassBoost,
+    Loudnorm,
+    SlowedReverb,
+    Nightcore,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PlayerState {
     pub status: PlaybackStatus,
@@ -23,10 +35,18 @@ pub struct PlayerState {
     /// reconexión cuando pasa a `false`.
     #[serde(default = "default_connected")]
     pub connected: bool,
+    #[serde(default)]
+    pub audio_preset: AudioPreset,
+    #[serde(default = "default_speed")]
+    pub speed: f64,
 }
 
 fn default_connected() -> bool {
     true
+}
+
+fn default_speed() -> f64 {
+    1.0
 }
 
 #[cfg(test)]
@@ -54,6 +74,8 @@ mod tests {
             volume: 60.0,
             looping: true,
             connected: true,
+            audio_preset: AudioPreset::Lofi,
+            speed: 1.15,
         };
 
         let json = serde_json::to_string(&state).expect("serialize PlayerState");
@@ -72,6 +94,8 @@ mod tests {
             volume: 100.0,
             looping: false,
             connected: true,
+            audio_preset: AudioPreset::Normal,
+            speed: 1.0,
         };
 
         let json = serde_json::to_string(&state).expect("serialize PlayerState");
@@ -91,6 +115,7 @@ mod tests {
         assert_eq!(state.volume, 0.0);
         assert!(!state.looping);
         assert!(!state.connected);
+        assert_eq!(state.audio_preset, AudioPreset::Normal);
     }
 
     #[test]
@@ -105,5 +130,7 @@ mod tests {
         }"#;
         let state: PlayerState = serde_json::from_str(json).expect("deserialize legacy state");
         assert!(state.connected);
+        assert_eq!(state.audio_preset, AudioPreset::Normal);
+        assert!((state.speed - 1.0).abs() < f64::EPSILON);
     }
 }

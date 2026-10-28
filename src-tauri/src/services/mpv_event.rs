@@ -3,8 +3,10 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::NamedPipeClient;
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::sleep;
@@ -202,7 +204,7 @@ impl MpvPlayer {
                 }
             };
 
-            let (reader, writer) = stream.into_split();
+            let (reader, writer) = tokio::io::split(stream);
 
             // Estado inicial hasta que `observe_property` reporte los reales.
             let mut status = MpvStatus {
@@ -282,12 +284,23 @@ impl MpvPlayer {
         kill_stale_mpv(socket_path);
         let _ = std::fs::remove_file(socket_path);
 
+        let ipc_arg = if cfg!(windows) {
+            let path_str = socket_path.to_string_lossy();
+            if path_str.starts_with(r"\\.\pipe\") {
+                format!("--input-ipc-server={}", path_str)
+            } else {
+                format!("--input-ipc-server=\\\\.\\pipe\\cadence-mpv-{}", std::process::id())
+            }
+        } else {
+            format!("--input-ipc-server={}", socket_path.display())
+        };
+
         let mut cmd = Command::new("mpv");
         cmd.arg("--idle=yes")
             .arg("--no-video")
             .arg("--really-quiet")
             .arg("--af=dynaudnorm")
-            .arg(format!("--input-ipc-server={}", socket_path.display()));
+            .arg(ipc_arg);
 
         if !cfg!(test) {
             if Path::new("/usr/lib/mpv-mpris/mpris.so").exists() {
@@ -309,6 +322,7 @@ impl MpvPlayer {
         Ok(child)
     }
 
+    #[cfg(unix)]
     async fn wait_for_socket(socket_path: &Path) -> Result<UnixStream, CadenceError> {
         for _ in 0..SOCKET_CONNECT_MAX_ATTEMPTS {
             if let Ok(stream) = UnixStream::connect(socket_path).await {
@@ -319,16 +333,31 @@ impl MpvPlayer {
         Err(CadenceError::MpvSocketTimeout(socket_path.to_path_buf()))
     }
 
+    #[cfg(windows)]
+    async fn wait_for_socket(socket_path: &Path) -> Result<NamedPipeClient, CadenceError> {
+        let pipe_name = socket_path.to_string_lossy();
+        for _ in 0..SOCKET_CONNECT_MAX_ATTEMPTS {
+            if let Ok(client) = tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name) {
+                return Ok(client);
+            }
+            sleep(SOCKET_CONNECT_RETRY_DELAY).await;
+        }
+        Err(CadenceError::MpvSocketTimeout(socket_path.to_path_buf()))
+    }
+
     /// Una conexión concreta: registra observers, procesa comandos y eventos
     /// hasta que el socket se cierra o se pide shutdown.
-    async fn run_connection(
-        mut reader: BufReader<OwnedReadHalf>,
-        mut writer: OwnedWriteHalf,
+    async fn run_connection<R, W>(
+        mut reader: BufReader<R>,
+        mut writer: W,
         cmd_rx: &mut mpsc::Receiver<MpvCommand>,
         status_tx: &watch::Sender<MpvStatus>,
         event_tx: &broadcast::Sender<MpvEvent>,
         status: &mut MpvStatus,
-    ) -> ConnectionOutcome {
+    ) -> ConnectionOutcome
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static, {
         let mut pending_replies: std::collections::HashMap<u64, PendingCommand> =
             std::collections::HashMap::new();
         let mut request_id_counter: u64 = 0;
@@ -637,6 +666,14 @@ impl MpvPlayer {
         reply_rx.await.map_err(|_| CadenceError::MpvConnectionClosed)?
     }
 
+    pub async fn set_audio_filter(&self, filter: &str) -> Result<(), CadenceError> {
+        self.set_property("af", json!(filter)).await
+    }
+
+    pub async fn set_speed(&self, speed: f64) -> Result<(), CadenceError> {
+        self.set_property("speed", json!(speed.clamp(0.25, 3.0))).await
+    }
+
     /// Fuerza el apagado de mpv (para shutdown de app).
     ///
     /// Espera a que el supervisor termine: es quien hace `kill` del hijo. Sin
@@ -648,7 +685,7 @@ impl MpvPlayer {
     }
 }
 
-async fn send_json(writer: &mut OwnedWriteHalf, value: &Value) -> Result<(), CadenceError> {
+async fn send_json<W: tokio::io::AsyncWrite + Unpin>(writer: &mut W, value: &Value) -> Result<(), CadenceError> {
     let mut payload = serde_json::to_vec(value).map_err(CadenceError::MpvSerialize)?;
     payload.push(b'\n');
     writer
@@ -674,9 +711,7 @@ fn stale_pid_file(socket_path: &Path) -> PathBuf {
 }
 
 /// Mata el mpv que quedó colgado del arranque anterior, si existe.
-///
-/// Solo se mata si el proceso sigue vivo **y** su línea de comando contiene
-/// nuestro socket, para no tocar procesos ajenos que reutilicen el PID.
+#[cfg(unix)]
 fn kill_stale_mpv(socket_path: &Path) {
     let pid_file = stale_pid_file(socket_path);
     let Ok(content) = std::fs::read_to_string(&pid_file) else {
@@ -698,8 +733,30 @@ fn kill_stale_mpv(socket_path: &Path) {
         .status();
 }
 
+#[cfg(windows)]
+fn kill_stale_mpv(socket_path: &Path) {
+    let pid_file = stale_pid_file(socket_path);
+    let Ok(content) = std::fs::read_to_string(&pid_file) else {
+        return;
+    };
+    let _ = std::fs::remove_file(&pid_file);
+
+    let Ok(pid) = content.trim().parse::<u32>() else {
+        return;
+    };
+    if pid == std::process::id() {
+        return;
+    }
+
+    tracing::warn!(pid, "terminating stale mpv process on Windows");
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .status();
+}
+
 /// Verifica en `/proc` que `pid` es, en efecto, nuestro mpv. Sin `/proc`
-/// (macOS) devolvemos false: ante la duda, no matamos.
+/// (macOS / Windows) devolvemos false: ante la duda, no matamos.
+#[cfg(unix)]
 fn process_is_our_mpv(pid: u32, socket_path: &Path) -> bool {
     let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
         return false;

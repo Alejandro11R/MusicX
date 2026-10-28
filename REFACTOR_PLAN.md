@@ -65,6 +65,31 @@
 - [x] **8.5** Frontend Liquid Glass: `QueuePanel` deslizable, badge contador, botones `+` en resultados/historial y atajos `N`, `P`, `Q`
 - [x] **8.6** Verificación total: 15/15 tests Vitest, 41/41 tests Rust (`cargo test`), 0 warnings `clippy`
 
+## Fase 9: Compatibilidad Windows, Motor Audio FX, Focus/Pomodoro Engine y Cadence CLI (Completado)
+- [x] **9.1** Compatibilidad Windows (Win32 Named Pipes & Process Management):
+  - Abstracción de sockets Unix (`/tmp/cadence-*.sock`) y Win32 Named Pipes (`\\.\pipe\cadence-*`).
+  - `MpvPlayer` con `tokio::io::split` para I/O asíncrono genérico sobre `UnixStream` y `NamedPipeClient`.
+  - Terminación segura de mpv en Windows (`taskkill /PID /F`) y Linux (`kill -TERM`).
+  - Gating condicional de señales de apagado: `SIGTERM` en Unix y `ctrl_c` en Windows.
+- [x] **9.2** Motor de Efectos de Audio y Presets en Tiempo Real (`services/orchestrator.rs`):
+  - Presets acústicos con cadenas FFmpeg `lavfi`: Normal, Lo-Fi (filtro pasa banda cálido), Bass Boost (+6dB low-shelf), Loudnorm (EBU R128), Slowed+Reverb (echo espacial + 0.88x speed) y Nightcore (pitch shift + tempo boost).
+  - Modulación de velocidad de reproducción (`0.85x` a `1.25x`) con recálculo dinámico.
+  - Re-aplicación automática tras cambio de pista y reconexión de mpv.
+- [x] **9.3** Motor Pomodoro / Focus Decoplado e Inmune a Deriva (`services/focus.rs`):
+  - Fases de trabajo (`Focus`), descanso corto (`ShortBreak`), descanso largo (`LongBreak`) e inactividad (`Idle`).
+  - Cálculo basado en `Instant` deadlines para prevenir desincronización por suspensión/hibernación del SO.
+  - Pausa automática de reproducción musical al concluir intervalos de concentración (`auto_pause_on_break`).
+  - Eventos push en tiempo real a Tauri (`FocusTick`, `FocusPhaseChanged`).
+- [x] **9.4** Servidor de Control IPC y Cliente Nativo `cadence-cli` (`src/bin/cli.rs`):
+  - Protocolo JSON-RPC ligero sobre sockets/named pipes locales.
+  - Comandos remotos soportados: `status`, `play`, `pause`, `resume`, `toggle`, `next`, `prev`, `volume`, `preset`, `speed`, `focus`, `queue list`, `queue clear`.
+  - Integración en `package.json` mediante script `npm run cli -- <args>`.
+- [x] **9.5** Interfaz Liquid Glass & Atajos Globales:
+  - Widget interactivo `FocusWidget` en barra superior con pulso animado.
+  - Barra de presets de ecualización y modulador de velocidad en `NowPlaying`.
+  - Atajo global `F` para iniciar/pausar sesiones de concentración.
+- [x] **9.6** Verificación total: 35 tests unitarios en Rust sin regresiones, 15 tests Vitest, compilación libre de warnings en clippy.
+
 ### Bugs reales encontrados y corregidos en la verificación
 
 1. **`end-file` ilegible con mpv ≥ 0.40** (`mpv_event.rs`)

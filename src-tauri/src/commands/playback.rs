@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::errors::CadenceError;
+use crate::models::player_state::AudioPreset;
 use crate::models::search_result::SearchResult;
+use crate::services::focus::{FocusEngine, FocusState};
 use crate::services::orchestrator::{PlayerOrchestrator, QueueItem};
 
 #[tauri::command]
@@ -117,4 +119,68 @@ pub async fn set_loop(
     enabled: bool,
 ) -> Result<(), CadenceError> {
     orchestrator.set_loop(enabled).await
+}
+
+#[tauri::command]
+pub async fn set_audio_preset(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    preset: AudioPreset,
+) -> Result<(), CadenceError> {
+    orchestrator.set_audio_preset(preset).await
+}
+
+#[tauri::command]
+pub async fn set_speed(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    speed: f64,
+) -> Result<(), CadenceError> {
+    orchestrator.set_speed(speed).await
+}
+
+#[tauri::command]
+pub async fn start_focus(
+    focus: tauri::State<'_, Arc<FocusEngine>>,
+) -> Result<(), CadenceError> {
+    focus.start().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pause_focus(
+    focus: tauri::State<'_, Arc<FocusEngine>>,
+) -> Result<(), CadenceError> {
+    focus.pause().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reset_focus(
+    focus: tauri::State<'_, Arc<FocusEngine>>,
+) -> Result<(), CadenceError> {
+    focus.reset().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn skip_focus(
+    focus: tauri::State<'_, Arc<FocusEngine>>,
+) -> Result<(), CadenceError> {
+    focus.skip().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_focus_state(
+    focus: tauri::State<'_, Arc<FocusEngine>>,
+) -> Result<FocusState, CadenceError> {
+    Ok(focus.get_state().await)
+}
+
+#[tauri::command]
+pub async fn set_focus_auto_pause(
+    focus: tauri::State<'_, Arc<FocusEngine>>,
+    enabled: bool,
+) -> Result<(), CadenceError> {
+    focus.set_auto_pause(enabled).await;
+    Ok(())
 }

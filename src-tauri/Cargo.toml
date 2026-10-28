@@ -14,6 +14,14 @@ edition = "2021"
 name = "cadence_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "cadence"
+path = "src/main.rs"
+
+[[bin]]
+name = "cadence-cli"
+path = "src/bin/cli.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

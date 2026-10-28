@@ -8,9 +8,13 @@ No heavy library, no algorithm feeds, no distractions. Just search → listen �
 
 - **Instant Search & Direct YouTube URLs:** Query YouTube or paste video URLs / IDs (`youtu.be`, `watch?v=`, Shorts, Music) directly.
 - **Queue / Up Next System:** Queue songs with 1-click (`+`), reorder or remove tracks, and enjoy atomic auto-advance to the next song upon track completion.
-- **Event-Driven Concurrency:** High-performance Rust backend powered by `PlayerOrchestrator` and `mpv` IPC socket event loop with zero-latency state subscriptions.
+- **Pomodoro Focus Engine:** Integrated focus timer (25 min Focus / 5 min Short Break / 15 min Long Break) with automatic playback pause during rest intervals.
+- **Real-Time Audio FX & Speed Presets:** In-flight audio filters powered by `mpv` (Lo-Fi ☕, Bass Boost 🔊, Loudnorm ⚖️, Slowed+Reverb 🌙, Nightcore ⚡) and speed modulation (`0.85x` – `1.25x`).
+- **Cadence CLI Client:** Complete command-line interface (`cadence-cli`) to play, pause, queue, switch presets, and manage focus sessions directly from your terminal or tmux.
+- **Cross-Platform (Linux & Windows):** Native IPC abstraction using Unix Domain Sockets on Linux/macOS and Win32 Named Pipes on Windows (`\\.\pipe\cadence-mpv-*`).
+- **Event-Driven Concurrency:** High-performance Rust backend powered by `PlayerOrchestrator` and `mpv` IPC event loop with zero-latency state subscriptions.
 - **Liquid Glass UI:** Modern translucent aesthetic with ambient blur, responsive progress scrubbers, volume controls, and track history.
-- **Keyboard-First & System Tray:** Complete control without leaving your flow (`Space`, `N`, `P`, `Q`, `M`, `L`, arrows, `/`) plus tray integration.
+- **Keyboard-First & System Tray:** Complete control without leaving your flow (`Space`, `N`, `P`, `Q`, `F`, `M`, `L`, arrows, `/`) plus tray integration.
 
 ## Philosophy
 
@@ -52,6 +56,35 @@ cd src-tauri && cargo test --lib -- --test-threads=1
 # Check lints and types
 npm run build
 cd src-tauri && cargo clippy --all-targets -- -D warnings
+```
+
+### Cadence CLI Usage
+
+While the Cadence desktop app is running, you can control it directly from any terminal:
+
+```bash
+# Check status (music + pomodoro)
+npm run cli -- status
+
+# Search and play
+npm run cli -- play "lofi beats"
+npm run cli -- play "https://youtu.be/..."
+
+# Media controls
+npm run cli -- toggle
+npm run cli -- next
+npm run cli -- prev
+npm run cli -- volume 80
+
+# Audio FX filters and speed
+npm run cli -- preset lofi
+npm run cli -- preset bass_boost
+npm run cli -- speed 1.15
+
+# Focus / Pomodoro timer
+npm run cli -- focus start
+npm run cli -- focus pause
+npm run cli -- focus skip
 ```
 
 ## Architecture & UI Documentation

@@ -195,29 +195,73 @@ to the frontend) via a `user_message()` method, deliberately separate from
 version of this did leak yt-dlp's raw "Please sign in..." stderr straight
 into the interface.
 
+### Cross-Platform Architecture: Linux & Windows
+
+Cadence is designed to run natively on both Linux and Windows:
+
+- **IPC Transport Abstraction:**
+  - **Linux / macOS:** Uses Unix Domain Sockets (`/tmp/cadence-mpv.sock` and `/tmp/cadence-control-<user>.sock`).
+  - **Windows:** Uses Win32 Named Pipes (`\\.\pipe\cadence-mpv-<user>` and `\\.\pipe\cadence-control-<user>`).
+  - mpv receives `--input-ipc-server=\\.\pipe\...` on Windows and `--input-ipc-server=/path/to/socket` on Unix.
+  - Tokio I/O is unified across platforms using `tokio::io::split` over generic `AsyncRead + AsyncWrite`.
+- **Process Management & Termination:**
+  - Linux uses Unix signal handling (`SIGTERM`) and `/proc` inspects for PID tracking.
+  - Windows handles `ctrl_c` and uses `taskkill /PID {pid} /F` for stale process cleanup.
+
+### Audio FX & Preset Engine via `mpv`
+
+Cadence inlines real-time audio manipulation without needing heavy client DSP libraries:
+
+- **Filter Presets:**
+  - `Lo-Fi (☕)`: `lavfi=[highpass=f=200,lowpass=f=4000]` cuts harsh highs and muddy sub-bass, producing warm vintage sound that reduces cognitive fatigue.
+  - `Bass Boost (🔊)`: `lavfi=[equalizer=f=60:width_type=h:width=50:g=10]`.
+  - `Loudnorm (⚖️)`: `lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]` standardizes fluctuating YouTube volume levels.
+  - `Slowed + Reverb (🌙)`: `lavfi=[aecho=0.8:0.88:60:0.4]` combined with `0.88x` speed.
+  - `Nightcore (⚡)`: `lavfi=[asetrate=44100*1.2,atempo=1.05]`.
+- **Dynamic Speed Modulation:**
+  - Speed adjustments (`0.85x` – `1.25x`) are handled via mpv's `speed` property, retaining pitch correction without distortion.
+- **Persistence Across Tracks:**
+  - Selected presets and speed are stored in `PlayerOrchestrator` (`desired_audio_preset`, `desired_speed`) and automatically re-applied upon new track loads or stream recoveries.
+
+### Focus Engine (Pomodoro)
+
+The `FocusEngine` (`services/focus.rs`) provides productivity sessions synchronized with music playback:
+
+- **Deadline-Based Clock:** Calculates remaining duration using `Instant::now()` against target deadlines, avoiding timer drift when laptops suspend or sleep.
+- **Automatic Audio Coordination:** When a focus session finishes, audio pauses automatically during the break period if `auto_pause_on_break` is enabled.
+- **Phases:** 25-minute Focus intervals, 5-minute Short Breaks, and 15-minute Long Breaks after every 4 completed sessions.
+
+### Local Control Server & Cadence CLI
+
+Cadence runs an asynchronous background `ControlServer` (`services/control_server.rs`) bound to a user-scoped IPC socket:
+
+- **Client Binary (`cadence-cli`):** A lightweight standalone executable that communicates with the active app using line-delimited JSON.
+- **Features:** Allows headless developers to inspect playback, search/play tracks, trigger focus sessions, and switch presets from tmux, Neovim, or custom window manager keybindings.
+
 ## Organization
 
 ```
 src-tauri/src/
-├── commands/    Tauri-facing adapters (playback.rs, search.rs). Thin delegation.
-├── services/    All business logic:
-│                ├── orchestrator.rs   — PlayerOrchestrator, queue management, auto-advance
-│                ├── mpv_event.rs      — MpvEventService, IPC event loop, property observers
-│                ├── yt_dlp.rs         — Direct URL extraction, search, TTL audio cache, circuit breaker
-│                └── mpv.rs            — Low-level Unix socket helper
-├── models/      Plain structs/enums shared between backend and frontend
-│                (SearchResult, PlayerState, PlaybackStatus, QueueItem).
-└── errors.rs    CadenceError — every external-process interaction returns
-                 Result<T, CadenceError>. #![deny(clippy::unwrap_used,
-                 clippy::expect_used)] at the crate root makes this a
-                 compiler error to violate, not just a convention.
+├── bin/
+│   ├── main.rs       — Desktop GUI entrypoint
+│   └── cli.rs        — Standalone Cadence CLI client (cadence-cli)
+├── commands/         Tauri-facing adapters (playback.rs, search.rs). Thin delegation.
+├── services/         All business logic:
+│   ├── orchestrator.rs   — PlayerOrchestrator, queue management, auto-advance, presets
+│   ├── mpv_event.rs      — Cross-platform MpvEventService, IPC event loop, property observers
+│   ├── yt_dlp.rs         — Direct URL extraction, search, TTL audio cache, circuit breaker
+│   ├── focus.rs          — FocusEngine (Pomodoro timer, phase transitions, auto-pause)
+│   └── control_server.rs — Cross-platform IPC server for CLI client communication
+├── models/           Plain structs/enums shared between backend and frontend
+│                     (SearchResult, PlayerState, PlaybackStatus, QueueItem, FocusState).
+└── errors.rs         CadenceError — every external-process interaction returns Result<T, CadenceError>.
 
 src/
 ├── lib/
-│   ├── tauri.ts     Thin invoke() wrappers + TS mirrors of Rust models/events.
-│   ├── playback.ts  Pure helper functions for durations, clamping, and seeking.
-│   └── utils.ts     UI styling and class merging helpers.
-└── App.tsx          Liquid Glass UI (SearchBar, SearchResults, QueuePanel, NowPlaying).
+│   ├── tauri.ts      Thin invoke() wrappers + TS mirrors of Rust models/events.
+│   ├── playback.ts   Pure helper functions for durations, clamping, and seeking.
+│   └── album-color.ts Canvas-based dominant color extraction for ambient glow.
+└── App.tsx           Liquid Glass UI (SearchBar, FocusWidget, QueuePanel, NowPlaying, Audio FX).
 ```
 
 ## Adding a new capability

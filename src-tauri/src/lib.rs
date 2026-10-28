@@ -19,7 +19,12 @@ pub fn run() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let socket_path = std::env::temp_dir().join("cadence-mpv.sock");
+    let socket_path = if cfg!(windows) {
+        let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
+        std::path::PathBuf::from(format!(r"\\.\pipe\cadence-mpv-{}", user))
+    } else {
+        std::env::temp_dir().join("cadence-mpv.sock")
+    };
 
     #[allow(clippy::expect_used)]
     let app = tauri::Builder::default()
@@ -37,12 +42,27 @@ pub fn run() {
             let orchestrator = tauri::async_runtime::block_on(
                 PlayerOrchestratorBuilder::new(socket_path.clone()).build(),
             )?;
-            app.manage(orchestrator);
+            app.manage(orchestrator.clone());
             tracing::info!("PlayerOrchestrator initialized");
 
-            // SIGTERM no dispara `ExitRequested` por sí solo: sin esto, el
-            // proceso muere y deja a mpv huérfano (lo limpia el pidfile en el
-            // próximo arranque, pero mejor apagarlo bien).
+            let focus = services::focus::FocusEngine::new(orchestrator.clone());
+            app.manage(focus.clone());
+            tracing::info!("FocusEngine initialized");
+
+            services::control_server::ControlServer::spawn(orchestrator.clone(), focus.clone());
+
+            let mut focus_rx = focus.subscribe_state();
+            let app_handle_focus = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while focus_rx.changed().await.is_ok() {
+                    let state = focus_rx.borrow().clone();
+                    use tauri::Emitter;
+                    let _ = app_handle_focus.emit("focus-state-changed", state);
+                }
+            });
+
+            // Señales de apagado limpio según el sistema operativo
+            #[cfg(unix)]
             {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -53,6 +73,16 @@ pub fn run() {
                     term.recv().await;
                     tracing::info!("SIGTERM received, exiting cleanly");
                     app_handle.exit(0);
+                });
+            }
+            #[cfg(windows)]
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if tokio::signal::ctrl_c().await.is_ok() {
+                        tracing::info!("Ctrl-C received, exiting cleanly");
+                        app_handle.exit(0);
+                    }
                 });
             }
 
@@ -146,6 +176,14 @@ pub fn run() {
             commands::playback::remove_from_queue,
             commands::playback::clear_queue,
             commands::playback::play_queue_index,
+            commands::playback::set_audio_preset,
+            commands::playback::set_speed,
+            commands::playback::start_focus,
+            commands::playback::pause_focus,
+            commands::playback::reset_focus,
+            commands::playback::skip_focus,
+            commands::playback::get_focus_state,
+            commands::playback::set_focus_auto_pause,
             commands::player::state,
             commands::player::health,
             commands::player::subscribe_events,

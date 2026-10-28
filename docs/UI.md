@@ -33,7 +33,7 @@ A single floating panel with a collapsible sliding Queue drawer:
 
 ```
 ┌──────────────────────────────────────────────┐
-│ 🎵 Cadence                     [–] [□] [×]   │
+│ 🎵 Cadence        [🎯 Focus 24:59] [–] [□] [×]│
 ├──────────────────────────────────────────────┤
 │ 🔍 Search or paste YouTube URL...            │
 │    [YouTube URL badge]                       │
@@ -51,15 +51,17 @@ A single floating panel with a collapsible sliding Queue drawer:
 │ ♪ Now Playing                                │
 │ Junior H — PIÉNSALO                          │
 │ ⏮  ⏯  ⏭    🔁 [=====●=====] 🔊 📋 (3)      │
+│ [✨ Normal] [☕ Lo-Fi] [🔊 Bass] [⚖️] [1.00x] │
 └──────────────────────────────────────────────┘
 ```
 
 Core zones:
 
-1. **Search & URL input** — single input supporting search queries and direct YouTube URLs.
-2. **Results & History** — live search results or recent tracks with instant play or `+` (add to queue).
-3. **Queue drawer (collapsible)** — displays upcoming tracks, active song indicator, and queue management controls.
-4. **Now Playing bar** — persistent playback bar with transport buttons (Previous, Play/Pause, Next, Loop), seek scrubber, volume control, and queue toggle.
+1. **Header bar & Focus Widget** — app title, status indicator, native drag region, and Pomodoro focus pill.
+2. **Search & URL input** — single input supporting search queries and direct YouTube URLs.
+3. **Results & History** — live search results or recent tracks with instant play or `+` (add to queue).
+4. **Queue drawer (collapsible)** — displays upcoming tracks, active song indicator, and queue management controls.
+5. **Now Playing bar & Audio FX** — persistent playback bar with transport buttons, seek scrubber, volume control, audio FX presets (Lo-Fi, Bass, Loudnorm, Slowed, Nightcore), and speed control.
 
 ## Design tokens
 
@@ -149,3 +151,18 @@ The secondary features originally deferred have now been implemented with Liquid
   - `Up / Down Arrow`: Adjust volume (5% increments).
 - **Direct YouTube URL Recognition:**
   - An inline badge signals immediately when a valid YouTube video URL or ID is pasted into the search bar.
+- **Focus Engine Widget (`FocusWidget`):**
+  - Integrated directly in the top header bar next to window controls.
+  - Displays the active phase (`Focus`, `Short Break`, `Long Break`, or `Idle`) and countdown timer.
+  - Interactive controls: start/pause toggle (`Play`/`Pause`), skip interval (`SkipForward`), and reset session (`RotateCcw`).
+  - Active visual feedback with a glowing emerald pulse during work intervals and amber during rest intervals.
+  - Global shortcut `F` toggles the active focus session.
+- **Audio FX Engine & Preset Toolbar:**
+  - Located on the Now Playing playback bar with quick toggle buttons:
+    - ✨ `Normal`: Clean sound, flat equalizer.
+    - ☕ `Lo-Fi`: Highpass 200 Hz + Lowpass 4000 Hz filter chain for warm, vintage focus sound.
+    - 🔊 `Bass Boost`: Dynamic bass enhancement (`equalizer=f=60:width_type=h:width=50:g=6`).
+    - ⚖️ `Loudnorm`: Dual-pass EBU R128 loudness normalization for consistent volume.
+    - 🌙 `Slowed+Reverb`: Stereo echo effect combined with `0.88x` playback speed.
+    - ⚡ `Nightcore`: Pitch-shifting sample rate (`asetrate=44100*1.2`) and tempo speedup (`1.05x`).
+  - Speed Modulation Controller: Step through playback speeds (`0.85x`, `0.90x`, `0.95x`, `1.00x`, `1.05x`, `1.10x`, `1.15x`, `1.20x`, `1.25x`).
