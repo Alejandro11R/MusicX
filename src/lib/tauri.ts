@@ -58,6 +58,61 @@ export interface QueueItem {
   track: SearchResult;
 }
 
+export type LyricsSource = "none" | "lrclib" | "local_lrc" | "id3";
+
+export interface LyricWord {
+  time_ms: number;
+  end_ms?: number;
+  text: string;
+}
+
+export interface LyricLine {
+  time_ms: number;
+  text: string;
+  words?: LyricWord[];
+}
+
+export interface LyricsDoc {
+  track_id: string;
+  source: LyricsSource;
+  synced: boolean;
+  instrumental: boolean;
+  offset_ms: number;
+  lines: LyricLine[];
+  title?: string;
+  artist?: string;
+}
+
+export interface LyricsRequest {
+  track_id: string;
+  title: string;
+  artist?: string | null;
+  album?: string | null;
+  duration_seconds?: number;
+  local_path?: string;
+  force?: boolean;
+}
+
+export interface LyricsCandidate {
+  id: number;
+  title: string;
+  artist: string;
+  album?: string;
+  duration_seconds: number;
+  has_synced: boolean;
+  instrumental: boolean;
+}
+
+export interface LyricsCacheStats {
+  memory_entries: number;
+  disk_entries: number;
+  disk_bytes: number;
+}
+
+export type LyricsEvent =
+  | { type: "Ready"; data: LyricsDoc }
+  | { type: "Unavailable"; data: { track_id: string; reason: string } };
+
 // Orchestrator events. The backend serializes them with
 // #[serde(tag = "type", content = "data")].
 export type OrchestratorEvent =
@@ -205,4 +260,34 @@ export function listenOrchestratorEvents(
   callback: (event: OrchestratorEvent) => void
 ): Promise<UnlistenFn> {
   return listen<OrchestratorEvent>("orchestrator-event", (e) => callback(e.payload));
+}
+
+export function getLyrics(request: LyricsRequest): Promise<LyricsDoc> {
+  return invoke("get_lyrics", { request });
+}
+
+export function searchLyrics(request: LyricsRequest): Promise<LyricsCandidate[]> {
+  return invoke("search_lyrics", { request });
+}
+
+export function getLyricsById(id: number, trackId: string): Promise<LyricsDoc> {
+  return invoke("get_lyrics_by_id", { id, trackId });
+}
+
+export function getLyricsCacheStats(): Promise<LyricsCacheStats> {
+  return invoke("lyrics_cache_stats");
+}
+
+export function clearLyricsCache(): Promise<number> {
+  return invoke("clear_lyrics_cache");
+}
+
+export function setLyricsEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_lyrics_enabled", { enabled });
+}
+
+export function listenLyricsEvents(
+  callback: (event: LyricsEvent) => void
+): Promise<UnlistenFn> {
+  return listen<LyricsEvent>("lyrics-event", (e) => callback(e.payload));
 }

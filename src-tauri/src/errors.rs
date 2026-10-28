@@ -46,6 +46,9 @@ pub enum CadenceError {
 
     #[error("queue error: {message}")]
     QueueError { message: String },
+
+    #[error("lyrics error: {message}")]
+    Lyrics { message: String },
 }
 
 impl CadenceError {
@@ -80,6 +83,7 @@ impl CadenceError {
                 "The audio player rejected that action."
             }
             CadenceError::QueueError { .. } => "An error occurred in the playback queue.",
+            CadenceError::Lyrics { .. } => "No pudimos cargar la letra de este tema.",
         }
     }
 }
@@ -127,6 +131,7 @@ impl From<CadenceError> for FrontendError {
             CadenceError::MpvCommand { command, message } => FrontendError::MpvCommandRejected { command, reason: message },
             CadenceError::MpvSpawn(_) | CadenceError::MpvIo(_) | CadenceError::MpvSerialize(_) => FrontendError::MpvConnectionLost,
             CadenceError::QueueError { message } => FrontendError::Unknown { message },
+            CadenceError::Lyrics { message } => FrontendError::Unknown { message },
         }
     }
 }

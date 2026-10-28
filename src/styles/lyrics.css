@@ -1,0 +1,366 @@
+/* ============================================================
+   Apple Music Liquid-Glass Lyrics Engine CSS
+   GPU-compositor driven: translate3d + opacity + scale
+   Zero heavy repaints, zero nested backdrop-filters per line
+   ============================================================ */
+
+.lyrics-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  background-color: rgba(10, 10, 14, 0.85);
+}
+
+/* Dynamic Ambient Liquid Aura (Mesh Gradient) */
+.lyrics-aura-background {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  opacity: 0.85;
+  transition: opacity 800ms ease;
+}
+
+.lyrics-aura-blob-1 {
+  position: absolute;
+  width: 75vw;
+  height: 75vh;
+  top: -20%;
+  left: -10%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--palette-primary, rgba(99, 102, 241, 0.45)) 0%, transparent 65%);
+  filter: blur(80px);
+  will-change: transform;
+  animation: auraFloat1 18s ease-in-out infinite alternate;
+}
+
+.lyrics-aura-blob-2 {
+  position: absolute;
+  width: 70vw;
+  height: 70vh;
+  bottom: -20%;
+  right: -10%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--palette-secondary, rgba(168, 85, 247, 0.38)) 0%, transparent 65%);
+  filter: blur(85px);
+  will-change: transform;
+  animation: auraFloat2 22s ease-in-out infinite alternate;
+}
+
+.lyrics-aura-blob-3 {
+  position: absolute;
+  width: 50vw;
+  height: 50vh;
+  top: 30%;
+  right: 15%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--palette-ambient, rgba(236, 72, 153, 0.28)) 0%, transparent 70%);
+  filter: blur(90px);
+  will-change: transform;
+  animation: auraFloat3 16s ease-in-out infinite alternate;
+}
+
+@keyframes auraFloat1 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(8%, 12%, 0) scale(1.08); }
+  100% { transform: translate3d(-6%, 6%, 0) scale(0.95); }
+}
+
+@keyframes auraFloat2 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-10%, -8%, 0) scale(1.12); }
+  100% { transform: translate3d(8%, -12%, 0) scale(0.92); }
+}
+
+@keyframes auraFloat3 {
+  0% { transform: translate3d(0, 0, 0) scale(0.9); }
+  50% { transform: translate3d(6%, -6%, 0) scale(1.15); }
+  100% { transform: translate3d(-8%, 10%, 0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lyrics-aura-blob-1,
+  .lyrics-aura-blob-2,
+  .lyrics-aura-blob-3 {
+    animation: none !important;
+  }
+}
+
+/* Glass Header / Controls */
+.lyrics-header {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: linear-gradient(to bottom, rgba(10, 10, 14, 0.7) 0%, rgba(10, 10, 14, 0) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.lyrics-track-info {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.lyrics-track-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  flex-shrink: 0;
+}
+
+.lyrics-track-meta {
+  min-width: 0;
+}
+
+.lyrics-track-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lyrics-track-artist {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lyrics-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.lyrics-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+}
+
+.lyrics-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.lyrics-btn-icon:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  transform: scale(1.05);
+}
+
+.lyrics-btn-icon:active {
+  transform: scale(0.95);
+}
+
+/* Scroll Viewport with Top & Bottom Fade Mask */
+.lyrics-viewport {
+  position: relative;
+  z-index: 5;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 2rem;
+  scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 1) 12%,
+    rgba(0, 0, 0, 1) 85%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 1) 12%,
+    rgba(0, 0, 0, 1) 85%,
+    transparent 100%
+  );
+}
+
+.lyrics-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lyrics-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.lyrics-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Lines Stack (Spacer at start/end so active line centers properly) */
+.lyrics-stack {
+  display: flex;
+  flex-direction: column;
+  padding: 38vh 0;
+  gap: 1.6rem;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* Individual Line Item (Apple Music fluid spring transition) */
+.lyric-line-item {
+  position: relative;
+  font-size: 1.65rem;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  padding: 0.4rem 0.8rem;
+  border-radius: 12px;
+  transform-origin: left center;
+  transition:
+    transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 350ms ease,
+    filter 350ms ease,
+    color 300ms ease;
+  will-change: transform, opacity, filter;
+  cursor: pointer;
+}
+
+/* Past lines */
+.lyric-line-past {
+  color: rgba(255, 255, 255, 0.32);
+  transform: scale(0.97);
+  filter: blur(0.4px);
+}
+
+/* Active Line (Apple Music Bright Highlight + Soft Aura Glow) */
+.lyric-line-active {
+  color: #ffffff;
+  font-weight: 700;
+  transform: scale(1.05) translateX(4px);
+  filter: none;
+  opacity: 1;
+  text-shadow:
+    0 0 18px rgba(255, 255, 255, 0.5),
+    0 0 35px var(--palette-primary, rgba(99, 102, 241, 0.4));
+}
+
+/* Future lines */
+.lyric-line-future {
+  color: rgba(255, 255, 255, 0.45);
+  transform: scale(0.97);
+  filter: blur(0.4px);
+}
+
+/* Hover: Line preview with quick seek affordance */
+.lyric-line-item:hover {
+  opacity: 0.95;
+  filter: none;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.lyric-line-play-hint {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.5rem;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: all 180ms ease;
+}
+
+.lyric-line-item:hover .lyric-line-play-hint {
+  opacity: 0.8;
+  transform: translateX(0);
+}
+
+/* Floating Resume Auto-Scroll Button */
+.lyrics-resume-scroll-btn {
+  position: absolute;
+  bottom: 2rem;
+  right: 2rem;
+  z-index: 15;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: 9999px;
+  background: rgba(30, 30, 40, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition: all 200ms ease;
+  animation: fadeIn 250ms ease;
+}
+
+.lyrics-resume-scroll-btn:hover {
+  background: rgba(45, 45, 60, 0.95);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Empty / Loading State */
+.lyrics-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 1rem;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
+  padding: 2rem;
+}
+
+.lyrics-empty-icon {
+  width: 56px;
+  height: 56px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.lyrics-empty-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.lyrics-empty-desc {
+  font-size: 0.88rem;
+  max-width: 360px;
+  line-height: 1.5;
+}

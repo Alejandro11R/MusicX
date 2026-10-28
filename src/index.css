@@ -4,6 +4,7 @@
 @import "@fontsource-variable/geist";
 @import "@/styles/liquid-glass.css";
 @import "@/styles/focus.css";
+@import "@/styles/lyrics.css";
 
 @custom-variant dark (&:is(.dark *));
 

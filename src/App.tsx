@@ -12,6 +12,7 @@ import {
   Link2,
   ListMusic,
   Loader2,
+  Mic2,
   Minus,
   Pause,
   Play,
@@ -35,6 +36,7 @@ import {
   FocusStudio,
   FocusWidget,
 } from "@/components/focus/FocusStudio";
+import { LyricsPanel } from "@/components/lyrics/LyricsPanel";
 import { cn } from "@/lib/utils";
 import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
 import { extractDominantColor } from "@/lib/album-color";
@@ -69,12 +71,16 @@ import {
   quit,
   subscribeEvents,
   listenOrchestratorEvents,
+  getLyrics,
+  listenLyricsEvents,
   type PlayerState,
   type SearchResult,
   type OrchestratorEvent,
   type QueueItem,
   type AudioPreset,
   type FocusState,
+  type LyricsDoc,
+  type LyricsEvent,
 } from "./lib/tauri";
 
 const POLL_INTERVAL_MS = 5000; // Fallback polling every 5s
@@ -420,6 +426,8 @@ interface NowPlayingProps {
   onToggleQueue: () => void;
   isQueueOpen: boolean;
   queueCount: number;
+  onToggleLyrics?: () => void;
+  isLyricsOpen?: boolean;
   onSelectPreset: (preset: AudioPreset) => void;
   onCycleSpeed: () => void;
   /** Solo mueve el thumb; no llama al backend hasta soltar. */
@@ -448,6 +456,8 @@ const NowPlaying = React.memo(function NowPlaying({
   onToggleQueue,
   isQueueOpen,
   queueCount,
+  onToggleLyrics,
+  isLyricsOpen,
   onSeekPreview,
   onSeekCommit,
   onVolumePreview,
@@ -640,6 +650,22 @@ const NowPlaying = React.memo(function NowPlaying({
             </span>
           )}
         </GlassButton>
+
+        {onToggleLyrics && (
+          <GlassButton
+            variant="ghost"
+            size="md"
+            aria-label="Letras sincronizadas (Y)"
+            title="Letras en tiempo real (Y)"
+            onClick={onToggleLyrics}
+            className={cn(
+              "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
+              isLyricsOpen && "bg-indigo-500/25 text-indigo-300 border-indigo-400/40 shadow-[0_0_12px_rgba(99,102,241,0.35)]",
+            )}
+          >
+            <Mic2 className="size-3.5" />
+          </GlassButton>
+        )}
       </div>
 
       {/* Control de Volumen Líquido */}
@@ -733,6 +759,9 @@ function App() {
   const [recentTracks, setRecentTracks] = useState<SearchResult[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [isLyricsOpen, setIsLyricsOpen] = useState(false);
+  const [lyricsDoc, setLyricsDoc] = useState<LyricsDoc | null>(null);
+  const [isLyricsLoading, setIsLyricsLoading] = useState(false);
   const [prevVolume, setPrevVolume] = useState<number>(100);
   const [focusState, setFocusState] = useState<FocusState | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -787,6 +816,16 @@ function App() {
     // Suscribirse a eventos Tauri (para que el backend emita)
     subscribeEvents().catch((err) => console.error("subscribeEvents failed:", err));
 
+    // Suscribirse a eventos de letras
+    const unlistenLyricsPromise = listenLyricsEvents((event: LyricsEvent) => {
+      if (event.type === "Ready") {
+        setLyricsDoc(event.data);
+        setIsLyricsLoading(false);
+      } else if (event.type === "Unavailable") {
+        setIsLyricsLoading(false);
+      }
+    });
+
     // Fallback polling (cada 5s) solo para recovery
     const poll = async () => {
       try {
@@ -802,6 +841,7 @@ function App() {
       clearInterval(interval);
       unlistenRef.current?.();
       unlistenFocusPromise.then((unlisten) => unlisten()).catch(console.error);
+      unlistenLyricsPromise.then((unlisten) => unlisten()).catch(console.error);
     };
   }, []);
 
@@ -854,6 +894,10 @@ function App() {
         getState().then(setPlayerState).catch(console.error);
         break;
       case "TrackStarted":
+        setLyricsDoc(null);
+        setIsLyricsLoading(true);
+        getState().then(setPlayerState).catch(console.error);
+        break;
       case "TrackEnded":
       case "StateChanged":
         getState().then(setPlayerState).catch(console.error);
@@ -902,6 +946,30 @@ function App() {
       setError(String(err));
     }
   }, []);
+
+  const handleToggleLyrics = useCallback(() => {
+    setIsLyricsOpen((prev) => {
+      const next = !prev;
+      if (next && !lyricsDoc && playerState?.current) {
+        setIsLyricsLoading(true);
+        getLyrics({
+          track_id: playerState.current.id,
+          title: playerState.current.title,
+          artist: playerState.current.artist,
+          duration_seconds: playerState.current.duration_seconds,
+        })
+          .then((doc) => {
+            setLyricsDoc(doc);
+            setIsLyricsLoading(false);
+          })
+          .catch((err) => {
+            console.error("Error al cargar letra inicial:", err);
+            setIsLyricsLoading(false);
+          });
+      }
+      return next;
+    });
+  }, [lyricsDoc, playerState?.current]);
 
   const handlePlayQueueIndex = useCallback(async (index: number) => {
     try {
@@ -1041,9 +1109,17 @@ function App() {
         }, 0);
       };
 
-      if (e.key === "Escape" && isFocusView) {
-        e.preventDefault();
-        setIsFocusView(false);
+      if (e.key === "Escape") {
+        if (isLyricsOpen) {
+          e.preventDefault();
+          setIsLyricsOpen(false);
+          return;
+        }
+        if (isFocusView) {
+          e.preventDefault();
+          setIsFocusView(false);
+          return;
+        }
       } else if (!isSearchFocused && e.shiftKey && (e.key === "F" || e.key === "f")) {
         e.preventDefault();
         setIsFocusView((prev) => !prev);
@@ -1068,6 +1144,9 @@ function App() {
       } else if (!isSearchFocused && (e.key === "q" || e.key === "Q")) {
         e.preventDefault();
         setIsQueueOpen((prev) => !prev);
+      } else if (!isSearchFocused && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        handleToggleLyrics();
       } else if (!isSearchFocused && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
         if (focusState?.is_running) {
@@ -1094,6 +1173,7 @@ function App() {
   }, [
     focusState?.is_running,
     isFocusView,
+    isLyricsOpen,
     handleNext,
     handlePauseFocus,
     handlePrevious,
@@ -1101,6 +1181,7 @@ function App() {
     handleToggleLoop,
     handleToggleMute,
     handleTogglePlayback,
+    handleToggleLyrics,
   ]);
 
   function saveToRecent(track: SearchResult) {
@@ -1546,8 +1627,20 @@ function App() {
           </div>
         )}
 
-        {/* Vista Central: Focus Studio, Cola de Reproducción O Resultados / Recientes */}
-        {isFocusView ? (
+        {/* Vista Central: Lyrics Engine, Focus Studio, Cola de Reproducción O Resultados / Recientes */}
+        {isLyricsOpen ? (
+          <LyricsPanel
+            currentTrack={playerState?.current ?? null}
+            lyricsDoc={lyricsDoc}
+            isLoading={isLyricsLoading}
+            positionSeconds={playerState?.position_seconds ?? 0}
+            isPlaying={isPlaying}
+            speed={playerState?.speed ?? 1.0}
+            onClose={() => setIsLyricsOpen(false)}
+            onSeek={handleSeekCommit}
+            onLyricsUpdated={(updated) => setLyricsDoc(updated)}
+          />
+        ) : isFocusView ? (
           focusState ? (
             <FocusStudio
               focusState={focusState}
@@ -1741,6 +1834,8 @@ function App() {
               onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
               isQueueOpen={isQueueOpen}
               queueCount={queue.length}
+              onToggleLyrics={handleToggleLyrics}
+              isLyricsOpen={isLyricsOpen}
               onSeekPreview={setDragPosition}
               onSeekCommit={handleSeekCommit}
               onVolumePreview={handleVolumePreview}

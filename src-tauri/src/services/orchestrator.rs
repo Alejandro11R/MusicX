@@ -196,6 +196,7 @@ pub struct PlayerOrchestrator {
     desired_speed: AtomicU64,
     mpv_events: broadcast::Receiver<MpvEvent>,
     _mpv_status_rx: watch::Receiver<MpvStatus>,
+    lyrics: Option<Arc<crate::services::lyrics::LyricsService>>,
 }
 
 impl PlayerOrchestrator {
@@ -204,6 +205,7 @@ impl PlayerOrchestrator {
         resolver: TrackResolver,
         mpv_events: broadcast::Receiver<MpvEvent>,
         mpv_status_rx: watch::Receiver<MpvStatus>,
+        lyrics: Option<Arc<crate::services::lyrics::LyricsService>>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(64);
         let initial_status = controller.status();
@@ -233,6 +235,7 @@ impl PlayerOrchestrator {
             desired_speed: AtomicU64::new(1.0f64.to_bits()),
             mpv_events,
             _mpv_status_rx: mpv_status_rx,
+            lyrics,
         }
     }
 
@@ -577,7 +580,13 @@ impl PlayerOrchestrator {
         let _ = self.controller.set_media_title(&display_title).await;
 
         self.set_mode(PlayerMode::Playing).await;
-        let _ = self.event_tx.send(OrchestratorEvent::TrackStarted(track));
+        let _ = self.event_tx.send(OrchestratorEvent::TrackStarted(track.clone()));
+
+        // Auto-fetch de letras en segundo plano (fire-and-forget, nunca bloquea el playback)
+        if let Some(ref lyrics) = self.lyrics {
+            let req = crate::models::lyrics::LyricsRequest::from_track(&track);
+            lyrics.request(req);
+        }
 
         // Queue Prefetch: Resolver el audio del siguiente tema en segundo plano
         self.prefetch_next_track().await;
@@ -747,34 +756,40 @@ impl PlayerOrchestrator {
 
     /// Precarga la URL del siguiente tema en segundo plano si existe en la cola.
     pub async fn prefetch_next_track(&self) {
-        let next_track_id = {
+        let (next_track_id, next_track) = {
             let queue = self.queue.read().await;
             let current_idx = *self.current_queue_index.read().await;
             if let Some(idx) = current_idx {
                 if idx + 1 < queue.len() {
-                    Some(queue[idx + 1].track.id.clone())
+                    let t = queue[idx + 1].track.clone();
+                    (Some(t.id.clone()), Some(t))
                 } else if self.desired_loop.load(Ordering::SeqCst) && !queue.is_empty() {
-                    Some(queue[0].track.id.clone())
+                    let t = queue[0].track.clone();
+                    (Some(t.id.clone()), Some(t))
                 } else {
-                    None
+                    (None, None)
                 }
             } else {
-                None
+                (None, None)
             }
         };
 
         if let Some(next_id) = next_track_id {
-            if next_id.starts_with("local:")
+            if !(next_id.starts_with("local:")
                 || next_id.starts_with("file://")
-                || std::path::Path::new(&next_id).is_file()
+                || std::path::Path::new(&next_id).is_file())
             {
-                return;
+                let resolver = self.resolver.clone();
+                tauri::async_runtime::spawn(async move {
+                    tracing::debug!(next_id = %next_id, "[prefetch] pre-resolving next track audio stream");
+                    let _ = resolver.resolve_audio(&next_id).await;
+                });
             }
-            let resolver = self.resolver.clone();
-            tauri::async_runtime::spawn(async move {
-                tracing::debug!(next_id = %next_id, "[prefetch] pre-resolving next track audio stream");
-                let _ = resolver.resolve_audio(&next_id).await;
-            });
+        }
+
+        if let (Some(next_track), Some(lyrics)) = (next_track, &self.lyrics) {
+            let req = crate::models::lyrics::LyricsRequest::from_track(&next_track);
+            lyrics.prefetch(req);
         }
     }
 
@@ -941,13 +956,20 @@ impl PlayerOrchestrator {
 /// Builder para crear el orquestador con todas sus dependencias.
 pub struct PlayerOrchestratorBuilder {
     mpv_socket_path: std::path::PathBuf,
+    lyrics: Option<Arc<crate::services::lyrics::LyricsService>>,
 }
 
 impl PlayerOrchestratorBuilder {
     pub fn new(socket_path: std::path::PathBuf) -> Self {
         Self {
             mpv_socket_path: socket_path,
+            lyrics: None,
         }
+    }
+
+    pub fn with_lyrics(mut self, lyrics: Arc<crate::services::lyrics::LyricsService>) -> Self {
+        self.lyrics = Some(lyrics);
+        self
     }
 
     pub async fn build(self) -> Result<Arc<PlayerOrchestrator>, CadenceError> {
@@ -965,6 +987,7 @@ impl PlayerOrchestratorBuilder {
             resolver,
             mpv_events,
             mpv_status,
+            self.lyrics,
         ));
 
         orchestrator.clone().spawn_event_loop();

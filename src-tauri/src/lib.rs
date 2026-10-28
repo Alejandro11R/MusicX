@@ -36,11 +36,18 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            // Inicializar servicio de letras (LyricsService) con caché y cliente LRCLIB
+            let lyrics = Arc::new(services::lyrics::LyricsService::new());
+            app.manage(lyrics.clone());
+            tracing::info!("LyricsService initialized");
+
             // Bloqueante a propósito: si el frontend llama un comando antes de
             // que el estado esté gestionado, Tauri falla con "state not
             // managed". Conectar mpv tarda ~100-300 ms.
             let orchestrator = tauri::async_runtime::block_on(
-                PlayerOrchestratorBuilder::new(socket_path.clone()).build(),
+                PlayerOrchestratorBuilder::new(socket_path.clone())
+                    .with_lyrics(lyrics.clone())
+                    .build(),
             )?;
             app.manage(orchestrator.clone());
             tracing::info!("PlayerOrchestrator initialized");
@@ -58,6 +65,16 @@ pub fn run() {
                     let state = focus_rx.borrow().clone();
                     use tauri::Emitter;
                     let _ = app_handle_focus.emit("focus-state-changed", state);
+                }
+            });
+
+            // Bridge para eventos de letras en tiempo real hacia el frontend
+            let mut lyrics_rx = lyrics.subscribe();
+            let app_handle_lyrics = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Ok(event) = lyrics_rx.recv().await {
+                    use tauri::Emitter;
+                    let _ = app_handle_lyrics.emit("lyrics-event", event);
                 }
             });
 
@@ -188,6 +205,12 @@ pub fn run() {
             commands::player::state,
             commands::player::health,
             commands::player::subscribe_events,
+            commands::lyrics::get_lyrics,
+            commands::lyrics::search_lyrics,
+            commands::lyrics::get_lyrics_by_id,
+            commands::lyrics::lyrics_cache_stats,
+            commands::lyrics::clear_lyrics_cache,
+            commands::lyrics::set_lyrics_enabled,
             commands::app::quit,
         ])
         .on_window_event(|window, event| {
