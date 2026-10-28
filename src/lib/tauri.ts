@@ -32,6 +32,11 @@ export interface HealthStatus {
   yt_dlp: boolean;
 }
 
+export interface QueueItem {
+  id: string;
+  track: SearchResult;
+}
+
 // Orchestrator events. The backend serializes them with
 // #[serde(tag = "type", content = "data")].
 export type OrchestratorEvent =
@@ -40,6 +45,7 @@ export type OrchestratorEvent =
   | { type: "PlaybackError"; data: string }
   | { type: "StateChanged"; data: PlaybackStatus }
   | { type: "ConnectionChanged"; data: { connected: boolean } }
+  | { type: "QueueUpdated"; data: QueueItem[] }
   | { type: "Progress"; data: { position_seconds: number; duration_seconds: number } };
 
 export function search(query: string, limit: number): Promise<SearchResult[]> {
@@ -72,6 +78,38 @@ export function seek(positionSeconds: number): Promise<void> {
 
 export function setLoop(enabled: boolean): Promise<void> {
   return invoke("set_loop", { enabled });
+}
+
+export function nextTrack(): Promise<void> {
+  return invoke("next");
+}
+
+export function previousTrack(): Promise<void> {
+  return invoke("previous");
+}
+
+export function getQueue(): Promise<QueueItem[]> {
+  return invoke("get_queue");
+}
+
+export function addToQueue(track: SearchResult): Promise<QueueItem> {
+  return invoke("add_to_queue", { track });
+}
+
+export function addToQueueNext(track: SearchResult): Promise<QueueItem> {
+  return invoke("add_to_queue_next", { track });
+}
+
+export function removeFromQueue(itemId: string): Promise<boolean> {
+  return invoke("remove_from_queue", { itemId });
+}
+
+export function clearQueue(): Promise<void> {
+  return invoke("clear_queue");
+}
+
+export function playQueueIndex(index: number): Promise<void> {
+  return invoke("play_queue_index", { index });
 }
 
 export function getState(): Promise<PlayerState> {

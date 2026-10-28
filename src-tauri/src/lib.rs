@@ -59,7 +59,9 @@ pub fn run() {
             if let Some(icon) = app.default_window_icon().cloned() {
                 let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Salir de Cadence", true, None::<&str>)?;
                 let toggle_i = tauri::menu::MenuItem::with_id(app, "toggle", "Mostrar / Ocultar", true, None::<&str>)?;
-                let menu = tauri::menu::Menu::with_items(app, &[&toggle_i, &quit_i])?;
+                let next_i = tauri::menu::MenuItem::with_id(app, "next", "Siguiente tema (Next)", true, None::<&str>)?;
+                let play_pause_i = tauri::menu::MenuItem::with_id(app, "play_pause", "Play / Pausa", true, None::<&str>)?;
+                let menu = tauri::menu::Menu::with_items(app, &[&toggle_i, &play_pause_i, &next_i, &quit_i])?;
 
                 let _tray = tauri::tray::TrayIconBuilder::new()
                     .icon(icon)
@@ -78,6 +80,27 @@ pub fn run() {
                                         let _ = window.show();
                                         let _ = window.set_focus();
                                     }
+                                }
+                            }
+                            "play_pause" => {
+                                if let Some(orchestrator) = app.try_state::<Arc<PlayerOrchestrator>>() {
+                                    let orch = orchestrator.inner().clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let state = orch.get_state().await;
+                                        if state.status == crate::models::player_state::PlaybackStatus::Playing {
+                                            let _ = orch.pause().await;
+                                        } else {
+                                            let _ = orch.resume().await;
+                                        }
+                                    });
+                                }
+                            }
+                            "next" => {
+                                if let Some(orchestrator) = app.try_state::<Arc<PlayerOrchestrator>>() {
+                                    let orch = orchestrator.inner().clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let _ = orch.next().await;
+                                    });
                                 }
                             }
                             _ => {}
@@ -115,6 +138,14 @@ pub fn run() {
             commands::playback::set_volume,
             commands::playback::seek,
             commands::playback::set_loop,
+            commands::playback::next,
+            commands::playback::previous,
+            commands::playback::get_queue,
+            commands::playback::add_to_queue,
+            commands::playback::add_to_queue_next,
+            commands::playback::remove_from_queue,
+            commands::playback::clear_queue,
+            commands::playback::play_queue_index,
             commands::player::state,
             commands::player::health,
             commands::player::subscribe_events,

@@ -102,6 +102,13 @@ pub enum PlayerMode {
     Paused,
 }
 
+/// Elemento dentro de la cola de reproducción.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct QueueItem {
+    pub id: String,
+    pub track: SearchResult,
+}
+
 /// Eventos internos del orquestador.
 ///
 /// Se serializan como `{ "type": "...", "data": ... }` para que el frontend
@@ -114,6 +121,7 @@ pub enum OrchestratorEvent {
     PlaybackError(String),
     StateChanged(PlayerMode),
     ConnectionChanged { connected: bool },
+    QueueUpdated(Vec<QueueItem>),
     /// Tick periódico para mover la barra de progreso sin polling desde el
     /// frontend (2 Hz).
     Progress {
@@ -156,6 +164,9 @@ pub struct PlayerOrchestrator {
     recovering: AtomicBool,
     /// `subscribe_events` es idempotente.
     events_subscribed: AtomicBool,
+    queue: RwLock<Vec<QueueItem>>,
+    current_queue_index: RwLock<Option<usize>>,
+    queue_id_counter: AtomicU64,
     mpv_events: broadcast::Receiver<MpvEvent>,
     _mpv_status_rx: watch::Receiver<MpvStatus>,
 }
@@ -188,6 +199,9 @@ impl PlayerOrchestrator {
             last_position: AtomicU64::new(0.0f64.to_bits()),
             recovering: AtomicBool::new(false),
             events_subscribed: AtomicBool::new(false),
+            queue: RwLock::new(Vec::new()),
+            current_queue_index: RwLock::new(None),
+            queue_id_counter: AtomicU64::new(1),
             mpv_events,
             _mpv_status_rx: mpv_status_rx,
         }
@@ -309,8 +323,18 @@ impl PlayerOrchestrator {
         if track.is_some() {
             let _ = self
                 .event_tx
-                .send(OrchestratorEvent::TrackEnded { reason });
+                .send(OrchestratorEvent::TrackEnded { reason: reason.clone() });
         }
+
+        // Si el tema terminó normalmente y no estamos en bucle, intentamos auto-avanzar la cola
+        if reason == "eof" && !self.desired_loop.load(Ordering::SeqCst) {
+            if let Ok(()) = self.next().await {
+                if self.current_track.read().await.is_some() {
+                    return;
+                }
+            }
+        }
+
         *self.current_track.write().await = None;
         self.desired_paused.store(false, Ordering::SeqCst);
         store_f64(&self.last_position, 0.0);
@@ -471,6 +495,32 @@ impl PlayerOrchestrator {
         store_f64(&self.last_position, 0.0);
         self.desired_paused.store(false, Ordering::SeqCst);
 
+        // Mantener sincronizada la cola de reproducción
+        {
+            let mut queue = self.queue.write().await;
+            let mut current_idx = self.current_queue_index.write().await;
+            if let Some(pos) = queue.iter().position(|i| i.track.id == track.id) {
+                *current_idx = Some(pos);
+            } else {
+                let counter = self.queue_id_counter.fetch_add(1, Ordering::SeqCst);
+                let id = format!(
+                    "q_{}_{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    counter
+                );
+                let item = QueueItem {
+                    id,
+                    track: track.clone(),
+                };
+                queue.push(item);
+                *current_idx = Some(queue.len() - 1);
+                let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+            }
+        }
+
         // `loadfile` reemplaza el archivo actual; no hace falta stop previo
         // (un stop extra generaría end-file y podría disparar una recuperación).
         if let Err(err) = self.controller.mpv.load(&audio_url).await {
@@ -539,6 +589,149 @@ impl PlayerOrchestrator {
     pub async fn set_loop(&self, enabled: bool) -> Result<(), CadenceError> {
         self.desired_loop.store(enabled, Ordering::SeqCst);
         self.controller.set_loop(enabled).await
+    }
+
+    /// Salta al siguiente tema en la cola.
+    pub async fn next(&self) -> Result<(), CadenceError> {
+        let next_track = {
+            let queue = self.queue.read().await;
+            if queue.is_empty() {
+                None
+            } else {
+                let mut current_idx = self.current_queue_index.write().await;
+                let next_idx = match *current_idx {
+                    Some(idx) => {
+                        if idx + 1 < queue.len() {
+                            idx + 1
+                        } else if self.desired_loop.load(Ordering::SeqCst) {
+                            0
+                        } else {
+                            return self.stop().await;
+                        }
+                    }
+                    None => 0,
+                };
+                *current_idx = Some(next_idx);
+                Some(queue[next_idx].track.clone())
+            }
+        };
+
+        if let Some(track) = next_track {
+            self.play(track).await
+        } else {
+            self.stop().await
+        }
+    }
+
+    /// Retrocede al tema anterior en la cola o reinicia si lleva más de 3 segundos.
+    pub async fn previous(&self) -> Result<(), CadenceError> {
+        let position = load_f64(&self.last_position);
+        if position > 3.0 {
+            return self.seek(0.0).await;
+        }
+
+        let prev_track = {
+            let queue = self.queue.read().await;
+            if queue.is_empty() {
+                None
+            } else {
+                let mut current_idx = self.current_queue_index.write().await;
+                let prev_idx = match *current_idx {
+                    Some(idx) if idx > 0 => idx - 1,
+                    Some(_) | None => 0,
+                };
+                *current_idx = Some(prev_idx);
+                Some(queue[prev_idx].track.clone())
+            }
+        };
+
+        if let Some(track) = prev_track {
+            self.play(track).await
+        } else {
+            self.seek(0.0).await
+        }
+    }
+
+    pub async fn get_queue(&self) -> Vec<QueueItem> {
+        self.queue.read().await.clone()
+    }
+
+    pub async fn add_to_queue(&self, track: SearchResult) -> QueueItem {
+        let mut queue = self.queue.write().await;
+        let counter = self.queue_id_counter.fetch_add(1, Ordering::SeqCst);
+        let id = format!(
+            "q_{}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            counter
+        );
+        let item = QueueItem { id, track };
+        queue.push(item.clone());
+        let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+        item
+    }
+
+    pub async fn add_to_queue_next(&self, track: SearchResult) -> QueueItem {
+        let mut queue = self.queue.write().await;
+        let counter = self.queue_id_counter.fetch_add(1, Ordering::SeqCst);
+        let id = format!(
+            "q_{}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            counter
+        );
+        let item = QueueItem { id, track };
+        let insert_idx = match *self.current_queue_index.read().await {
+            Some(idx) => (idx + 1).min(queue.len()),
+            None => queue.len(),
+        };
+        queue.insert(insert_idx, item.clone());
+        let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+        item
+    }
+
+    pub async fn remove_from_queue(&self, item_id: &str) -> bool {
+        let mut queue = self.queue.write().await;
+        if let Some(pos) = queue.iter().position(|i| i.id == item_id) {
+            queue.remove(pos);
+            let mut current_idx = self.current_queue_index.write().await;
+            if let Some(idx) = *current_idx {
+                if pos < idx {
+                    *current_idx = Some(idx.saturating_sub(1));
+                } else if pos == idx && pos >= queue.len() {
+                    *current_idx = if queue.is_empty() { None } else { Some(queue.len() - 1) };
+                }
+            }
+            let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn clear_queue(&self) {
+        let mut queue = self.queue.write().await;
+        queue.clear();
+        *self.current_queue_index.write().await = None;
+        let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(vec![]));
+    }
+
+    pub async fn play_queue_index(&self, index: usize) -> Result<(), CadenceError> {
+        let track = {
+            let queue = self.queue.read().await;
+            if index >= queue.len() {
+                return Err(CadenceError::QueueError {
+                    message: format!("Queue index {} out of bounds", index),
+                });
+            }
+            *self.current_queue_index.write().await = Some(index);
+            queue[index].track.clone()
+        };
+        self.play(track).await
     }
 
     /// Obtiene estado completo para el frontend.

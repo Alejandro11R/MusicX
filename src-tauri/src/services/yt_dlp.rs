@@ -25,7 +25,8 @@ struct YtDlpEntry {
     title: String,
     artist: Option<String>,
     duration: Option<f64>,
-    ie_key: String,
+    #[serde(default)]
+    ie_key: Option<String>,
 }
 
 impl From<YtDlpEntry> for SearchResult {
@@ -160,6 +161,67 @@ pub struct YtDlpService {
     circuit_breaker: Arc<tokio::sync::Mutex<CircuitBreaker>>,
 }
 
+/// Extrae el ID de video de YouTube si el input es una URL o ID válido.
+pub fn extract_youtube_video_id(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Caso 1: youtu.be/<id>
+    if let Some(pos) = trimmed.find("youtu.be/") {
+        let remainder = &trimmed[pos + "youtu.be/".len()..];
+        let id: String = remainder
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if id.len() == 11 {
+            return Some(id);
+        }
+    }
+
+    // Caso 2: youtube.com/watch?v=<id>, music.youtube.com, etc.
+    if trimmed.contains("youtube.com") || trimmed.contains("youtube-nocookie.com") {
+        if let Some(pos) = trimmed.find("v=") {
+            let remainder = &trimmed[pos + 2..];
+            let id: String = remainder
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            if id.len() == 11 {
+                return Some(id);
+            }
+        }
+        for prefix in &["/shorts/", "/embed/"] {
+            if let Some(pos) = trimmed.find(prefix) {
+                let remainder = &trimmed[pos + prefix.len()..];
+                let id: String = remainder
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                if id.len() == 11 {
+                    return Some(id);
+                }
+            }
+        }
+    }
+
+    // Caso 3: Es exactamente un ID de 11 caracteres típico de YouTube
+    if trimmed.len() == 11
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && (trimmed.contains('-')
+            || trimmed.contains('_')
+            || (trimmed.chars().any(|c| c.is_ascii_uppercase())
+                && trimmed.chars().any(|c| c.is_ascii_digit())))
+    {
+        return Some(trimmed.to_string());
+    }
+
+    None
+}
+
 impl YtDlpService {
     pub fn new() -> Self {
         Self {
@@ -194,7 +256,13 @@ impl YtDlpService {
         }
         drop(cb);
 
-        let search_spec = format!("ytsearch{limit}:{query}");
+        let trimmed = query.trim();
+        let direct_id = extract_youtube_video_id(trimmed);
+        let search_spec = if let Some(ref id) = direct_id {
+            format!("https://www.youtube.com/watch?v={id}")
+        } else {
+            format!("ytsearch{limit}:{trimmed}")
+        };
         let output = self.run_yt_dlp_search(&["--flat-playlist", "-j", &search_spec]).await;
 
         let mut cb = self.circuit_breaker.lock().await;
@@ -309,7 +377,12 @@ impl YtDlpService {
 
         let results = entries
             .into_iter()
-            .filter(|entry| entry.ie_key == "Youtube")
+            .filter(|entry| {
+                match entry.ie_key.as_deref() {
+                    Some("Youtube") | None => true,
+                    Some(_) => false,
+                }
+            })
             .map(SearchResult::from)
             .collect();
 
@@ -434,7 +507,7 @@ mod tests {
             title: "Some Track".to_string(),
             artist: None,
             duration: Some(120.0),
-            ie_key: "Youtube".to_string(),
+            ie_key: Some("Youtube".to_string()),
         };
         let result = SearchResult::from(entry);
         assert_eq!(result.thumbnail_url, "https://i.ytimg.com/vi/abc123/hqdefault.jpg");
@@ -448,17 +521,21 @@ mod tests {
                 title: "A Real Song".to_string(),
                 artist: None,
                 duration: Some(200.0),
-                ie_key: "Youtube".to_string(),
+                ie_key: Some("Youtube".to_string()),
             },
             YtDlpEntry {
                 id: "UCRRmSKkhOKEO6vIBaxG-ejA".to_string(),
                 title: "Some Artist".to_string(),
                 artist: None,
                 duration: None,
-                ie_key: "YoutubeTab".to_string(),
+                ie_key: Some("YoutubeTab".to_string()),
             },
         ];
-        let results: Vec<SearchResult> = entries.into_iter().filter(|e| e.ie_key == "Youtube").map(SearchResult::from).collect();
+        let results: Vec<SearchResult> = entries
+            .into_iter()
+            .filter(|e| matches!(e.ie_key.as_deref(), Some("Youtube") | None))
+            .map(SearchResult::from)
+            .collect();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "abc123");
     }
@@ -566,5 +643,41 @@ mod tests {
             now_unix_secs().saturating_sub(5)
         ));
         assert!(!entry.is_valid());
+    }
+
+    #[test]
+    fn extracts_youtube_video_ids_correctly() {
+        assert_eq!(
+            extract_youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://youtu.be/dQw4w9WgXcQ?t=42"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=RDAMVM"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://m.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://www.youtube.com/embed/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_video_id("dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        // Búsquedas normales de texto deben retornar None
+        assert_eq!(extract_youtube_video_id("rick astley never gonna give you up"), None);
+        assert_eq!(extract_youtube_video_id("daft punk"), None);
+        assert_eq!(extract_youtube_video_id(""), None);
     }
 }

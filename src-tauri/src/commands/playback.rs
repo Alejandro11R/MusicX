@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::errors::CadenceError;
 use crate::models::search_result::SearchResult;
-use crate::services::orchestrator::PlayerOrchestrator;
+use crate::services::orchestrator::{PlayerOrchestrator, QueueItem};
 
 #[tauri::command]
 pub async fn play(
@@ -11,6 +11,67 @@ pub async fn play(
 ) -> Result<(), CadenceError> {
     tracing::info!(track_id = %track.id, title = %track.title, "Playing track");
     orchestrator.play(track).await
+}
+
+#[tauri::command]
+pub async fn next(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+) -> Result<(), CadenceError> {
+    orchestrator.next().await
+}
+
+#[tauri::command]
+pub async fn previous(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+) -> Result<(), CadenceError> {
+    orchestrator.previous().await
+}
+
+#[tauri::command]
+pub async fn get_queue(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+) -> Result<Vec<QueueItem>, CadenceError> {
+    Ok(orchestrator.get_queue().await)
+}
+
+#[tauri::command]
+pub async fn add_to_queue(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    track: SearchResult,
+) -> Result<QueueItem, CadenceError> {
+    Ok(orchestrator.add_to_queue(track).await)
+}
+
+#[tauri::command]
+pub async fn add_to_queue_next(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    track: SearchResult,
+) -> Result<QueueItem, CadenceError> {
+    Ok(orchestrator.add_to_queue_next(track).await)
+}
+
+#[tauri::command]
+pub async fn remove_from_queue(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    item_id: String,
+) -> Result<bool, CadenceError> {
+    Ok(orchestrator.remove_from_queue(&item_id).await)
+}
+
+#[tauri::command]
+pub async fn clear_queue(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+) -> Result<(), CadenceError> {
+    orchestrator.clear_queue().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn play_queue_index(
+    orchestrator: tauri::State<'_, Arc<PlayerOrchestrator>>,
+    index: usize,
+) -> Result<(), CadenceError> {
+    orchestrator.play_queue_index(index).await
 }
 
 #[tauri::command]

@@ -43,6 +43,9 @@ pub enum CadenceError {
 
     #[error("YouTube requires sign-in to resolve video {video_id}")]
     YtDlpAuthRequired { video_id: String },
+
+    #[error("queue error: {message}")]
+    QueueError { message: String },
 }
 
 impl CadenceError {
@@ -76,6 +79,7 @@ impl CadenceError {
             CadenceError::MpvSerialize(_) | CadenceError::MpvCommand { .. } => {
                 "The audio player rejected that action."
             }
+            CadenceError::QueueError { .. } => "An error occurred in the playback queue.",
         }
     }
 }
@@ -122,6 +126,7 @@ impl From<CadenceError> for FrontendError {
             CadenceError::MpvConnectionClosed | CadenceError::MpvSocketTimeout(_) => FrontendError::MpvConnectionLost,
             CadenceError::MpvCommand { command, message } => FrontendError::MpvCommandRejected { command, reason: message },
             CadenceError::MpvSpawn(_) | CadenceError::MpvIo(_) | CadenceError::MpvSerialize(_) => FrontendError::MpvConnectionLost,
+            CadenceError::QueueError { message } => FrontendError::Unknown { message },
         }
     }
 }

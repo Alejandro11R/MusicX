@@ -9,12 +9,17 @@ import React, {
 import {
   Clock,
   Headphones,
+  Link2,
+  ListMusic,
   Loader2,
   Minus,
   Pause,
   Play,
+  Plus,
   Repeat,
   Search,
+  SkipBack,
+  SkipForward,
   Square,
   Volume2,
   VolumeX,
@@ -37,6 +42,13 @@ import {
   setVolume,
   seek,
   setLoop,
+  nextTrack,
+  previousTrack,
+  getQueue,
+  addToQueue,
+  removeFromQueue,
+  clearQueue,
+  playQueueIndex,
   getState,
   health,
   quit,
@@ -45,6 +57,7 @@ import {
   type PlayerState,
   type SearchResult,
   type OrchestratorEvent,
+  type QueueItem,
 } from "./lib/tauri";
 
 const POLL_INTERVAL_MS = 5000; // Fallback polling every 5s
@@ -62,6 +75,7 @@ interface SearchResultItemProps {
   isPlaying: boolean;
   isLoading: boolean;
   onClick: () => void;
+  onAddToQueue?: (e: React.MouseEvent) => void;
   onMouseEnter: () => void;
 }
 
@@ -71,6 +85,7 @@ const SearchResultItem = React.memo(function SearchResultItem({
   isPlaying,
   isLoading,
   onClick,
+  onAddToQueue,
   onMouseEnter,
 }: SearchResultItemProps) {
   return (
@@ -119,9 +134,28 @@ const SearchResultItem = React.memo(function SearchResultItem({
             </span>
           )}
         </div>
-        <span className="shrink-0 text-[11px] tabular-nums text-white/40">
-          {formatDuration(track.duration_seconds)}
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[11px] tabular-nums text-white/40">
+            {formatDuration(track.duration_seconds)}
+          </span>
+          {onAddToQueue && (
+            <div
+              role="button"
+              tabIndex={0}
+              className="opacity-0 group-hover:opacity-100 p-1 rounded-md bg-white/10 hover:bg-teal-400/20 hover:text-teal-300 text-white/70 transition-all cursor-pointer"
+              title="Añadir a la cola"
+              onClick={onAddToQueue}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  onAddToQueue(e as unknown as React.MouseEvent);
+                }
+              }}
+            >
+              <Plus className="size-3.5" />
+            </div>
+          )}
+        </div>
       </button>
     </li>
   );
@@ -132,6 +166,7 @@ interface RecentTrackItemProps {
   isPlaying: boolean;
   isLoading: boolean;
   onClick: () => void;
+  onAddToQueue?: (e: React.MouseEvent) => void;
 }
 
 const RecentTrackItem = React.memo(function RecentTrackItem({
@@ -139,6 +174,7 @@ const RecentTrackItem = React.memo(function RecentTrackItem({
   isPlaying,
   isLoading,
   onClick,
+  onAddToQueue,
 }: RecentTrackItemProps) {
   return (
     <li>
@@ -173,22 +209,166 @@ const RecentTrackItem = React.memo(function RecentTrackItem({
           <span
             className={cn(
               "truncate text-xs font-medium leading-tight",
-              isPlaying ? "text-teal-300" : "text-white/95",
+              isPlaying ? "text-teal-300" : "text-white/90",
             )}
           >
             {track.title}
           </span>
           {track.artist && (
-            <span className="truncate text-[11px] text-white/60">
+            <span className="truncate text-[11px] text-white/50">
               {track.artist}
             </span>
           )}
         </div>
-        <span className="shrink-0 text-[11px] tabular-nums text-white/50">
-          {formatDuration(track.duration_seconds)}
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[11px] tabular-nums text-white/40">
+            {formatDuration(track.duration_seconds)}
+          </span>
+          {onAddToQueue && (
+            <div
+              role="button"
+              tabIndex={0}
+              className="opacity-0 group-hover:opacity-100 p-1 rounded-md bg-white/10 hover:bg-teal-400/20 hover:text-teal-300 text-white/70 transition-all cursor-pointer"
+              title="Añadir a la cola"
+              onClick={onAddToQueue}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  onAddToQueue(e as unknown as React.MouseEvent);
+                }
+              }}
+            >
+              <Plus className="size-3.5" />
+            </div>
+          )}
+        </div>
       </button>
     </li>
+  );
+});
+
+interface QueuePanelProps {
+  queue: QueueItem[];
+  currentTrackId?: string;
+  onPlayItem: (index: number) => void;
+  onRemoveItem: (id: string, e: React.MouseEvent) => void;
+  onClearQueue: () => void;
+  onClose: () => void;
+}
+
+const QueuePanel = React.memo(function QueuePanel({
+  queue,
+  currentTrackId,
+  onPlayItem,
+  onRemoveItem,
+  onClearQueue,
+  onClose,
+}: QueuePanelProps) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2 p-1">
+      <div className="flex items-center justify-between px-1">
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-white/80">
+          <ListMusic className="size-3.5 text-teal-400" />
+          Cola de reproducción ({queue.length})
+        </span>
+        <div className="flex items-center gap-2">
+          {queue.length > 0 && (
+            <button
+              type="button"
+              onClick={onClearQueue}
+              className="text-[10px] text-white/50 hover:text-rose-300 transition-colors"
+            >
+              Limpiar
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[10px] text-white/50 hover:text-white transition-colors"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+
+      {queue.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center p-6 select-none">
+          <div className="size-10 rounded-xl liquid-pill flex items-center justify-center text-white/40 shadow-sm">
+            <ListMusic className="size-5" />
+          </div>
+          <p className="text-xs text-white/60">La cola está vacía</p>
+          <p className="text-[11px] text-white/40">Usa el botón + en cualquier canción para encolarla</p>
+        </div>
+      ) : (
+        <ScrollArea className="min-h-0 flex-1 pr-1">
+          <ol className="flex flex-col gap-1.5">
+            {queue.map((item, index) => {
+              const isCurrent = currentTrackId === item.track.id;
+              return (
+                <li key={item.id}>
+                  <div
+                    className={cn(
+                      "group relative flex w-full items-center gap-3 rounded-xl p-2 text-left transition-all duration-200",
+                      "bg-white/[0.02] hover:bg-white/[0.08] border border-transparent hover:border-white/10",
+                      isCurrent && "bg-teal-500/10 border-teal-500/30 shadow-[0_0_15px_-3px_rgba(45,212,191,0.2)]",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      onClick={() => onPlayItem(index)}
+                    >
+                      <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm">
+                        <img
+                          src={item.track.thumbnail_url}
+                          alt=""
+                          className="size-full object-cover"
+                          loading="lazy"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLElement).style.display = "none";
+                          }}
+                        />
+                        {isCurrent && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs">
+                            <Play className="size-3.5 fill-teal-300 text-teal-300" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex min-w-0 flex-1 flex-col justify-center">
+                        <span
+                          className={cn(
+                            "truncate text-xs font-medium leading-tight",
+                            isCurrent ? "text-teal-300" : "text-white/90",
+                          )}
+                        >
+                          {item.track.title}
+                        </span>
+                        {item.track.artist && (
+                          <span className="truncate text-[11px] text-white/50">
+                            {item.track.artist}
+                          </span>
+                        )}
+                      </div>
+                      <span className="shrink-0 text-[11px] tabular-nums text-white/40">
+                        {formatDuration(item.track.duration_seconds)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => onRemoveItem(item.id, e)}
+                      className="size-6 shrink-0 rounded-lg flex items-center justify-center text-white/30 hover:text-rose-300 hover:bg-rose-500/10 transition-colors"
+                      title="Quitar de la cola"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </ScrollArea>
+      )}
+    </div>
   );
 });
 
@@ -201,6 +381,11 @@ interface NowPlayingProps {
   onTogglePlayback: () => void;
   onToggleLoop: () => void;
   onStop: () => void;
+  onNext: () => void;
+  onPrevious: () => void;
+  onToggleQueue: () => void;
+  isQueueOpen: boolean;
+  queueCount: number;
   /** Solo mueve el thumb; no llama al backend hasta soltar. */
   onSeekPreview: (position: number) => void;
   /** Confirma el seek al soltar el slider. */
@@ -222,6 +407,11 @@ const NowPlaying = React.memo(function NowPlaying({
   onTogglePlayback,
   onToggleLoop,
   onStop,
+  onNext,
+  onPrevious,
+  onToggleQueue,
+  isQueueOpen,
+  queueCount,
   onSeekPreview,
   onSeekCommit,
   onVolumePreview,
@@ -329,7 +519,7 @@ const NowPlaying = React.memo(function NowPlaying({
       )}
 
       {/* Controles Principales */}
-      <div className="flex items-center justify-center gap-3 pt-0.5">
+      <div className="flex items-center justify-center gap-2 pt-0.5">
         <GlassButton
           variant="ghost"
           size="md"
@@ -346,6 +536,17 @@ const NowPlaying = React.memo(function NowPlaying({
         </GlassButton>
 
         <GlassButton
+          variant="ghost"
+          size="md"
+          aria-label="Pista anterior (P)"
+          title="Pista anterior (P)"
+          onClick={onPrevious}
+          className="border-white/5 hover:bg-white/[0.1] hover:text-white"
+        >
+          <SkipBack className="size-3.5 fill-current" />
+        </GlassButton>
+
+        <GlassButton
           variant="primary"
           size="lg"
           aria-label={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
@@ -358,12 +559,42 @@ const NowPlaying = React.memo(function NowPlaying({
         <GlassButton
           variant="ghost"
           size="md"
+          aria-label="Siguiente pista (N)"
+          title="Siguiente pista (N)"
+          onClick={onNext}
+          className="border-white/5 hover:bg-white/[0.1] hover:text-white"
+        >
+          <SkipForward className="size-3.5 fill-current" />
+        </GlassButton>
+
+        <GlassButton
+          variant="ghost"
+          size="md"
           aria-label="Detener"
           title="Detener"
           onClick={onStop}
           className="border-white/5 hover:bg-white/[0.1] hover:text-white"
         >
           <Square className="size-3.5 fill-current" />
+        </GlassButton>
+
+        <GlassButton
+          variant="ghost"
+          size="md"
+          aria-label="Cola de reproducción (Q)"
+          title={`Cola de reproducción (${queueCount}) (Q)`}
+          onClick={onToggleQueue}
+          className={cn(
+            "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
+            isQueueOpen && "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]",
+          )}
+        >
+          <ListMusic className="size-3.5" />
+          {queueCount > 0 && (
+            <span className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center rounded-full bg-teal-400 text-[8px] font-bold text-black shadow-xs">
+              {queueCount > 9 ? "9+" : queueCount}
+            </span>
+          )}
         </GlassButton>
       </div>
 
@@ -414,6 +645,8 @@ function App() {
   const [playerState, setPlayerState] = useState<PlayerState | null>(null);
   const [dragPosition, setDragPosition] = useState<number | null>(null);
   const [recentTracks, setRecentTracks] = useState<SearchResult[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [prevVolume, setPrevVolume] = useState<number>(100);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const playerStateRef = useRef<PlayerState | null>(null);
@@ -442,6 +675,9 @@ function App() {
     } catch (e) {
       console.error("Error al cargar historial:", e);
     }
+
+    // Cargar cola inicial
+    getQueue().then(setQueue).catch(console.error);
 
     // Health check inicial
     health()
@@ -514,6 +750,9 @@ function App() {
           getState().then(setPlayerState).catch(console.error);
         }
         break;
+      case "QueueUpdated":
+        setQueue(event.data);
+        break;
       case "PlaybackError":
         setError(event.data);
         getState().then(setPlayerState).catch(console.error);
@@ -525,6 +764,65 @@ function App() {
         break;
     }
   }, []);
+
+  const handleNext = useCallback(async () => {
+    try {
+      await nextTrack();
+    } catch (err) {
+      console.error("nextTrack error:", err);
+    }
+  }, []);
+
+  const handlePrevious = useCallback(async () => {
+    try {
+      await previousTrack();
+    } catch (err) {
+      console.error("previousTrack error:", err);
+    }
+  }, []);
+
+  const handleAddToQueue = useCallback(async (track: SearchResult, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await addToQueue(track);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handleRemoveFromQueue = useCallback(async (itemId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await removeFromQueue(itemId);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handleClearQueue = useCallback(async () => {
+    try {
+      await clearQueue();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handlePlayQueueIndex = useCallback(async (index: number) => {
+    try {
+      await playQueueIndex(index);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const isYoutubeUrl = useMemo(() => {
+    const t = query.trim();
+    return (
+      t.includes("youtube.com") ||
+      t.includes("youtu.be") ||
+      (t.length === 11 && !t.includes(" "))
+    );
+  }, [query]);
 
   useEffect(() => {
     function handleGlobalKeyDown(e: KeyboardEvent) {
@@ -542,6 +840,15 @@ function App() {
       } else if (!isSearchFocused && (e.code === "Space" || e.key === " ")) {
         e.preventDefault();
         handleTogglePlayback();
+      } else if (!isSearchFocused && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        handleNext();
+      } else if (!isSearchFocused && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        handlePrevious();
+      } else if (!isSearchFocused && (e.key === "q" || e.key === "Q")) {
+        e.preventDefault();
+        setIsQueueOpen((prev) => !prev);
       } else if (!isSearchFocused && e.key.toLowerCase() === "m") {
         e.preventDefault();
         handleToggleMute();
@@ -558,7 +865,7 @@ function App() {
     }
     document.addEventListener("keydown", handleGlobalKeyDown);
     return () => document.removeEventListener("keydown", handleGlobalKeyDown);
-  }, []);
+  }, [handleNext, handlePrevious, handleToggleLoop, handleToggleMute, handleTogglePlayback]);
 
   function saveToRecent(track: SearchResult) {
     setRecentTracks((prev) => {
@@ -828,10 +1135,19 @@ function App() {
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
               onKeyDown={handleSearchKeyDown}
-              placeholder="Buscar canción, artista o ambiente..."
+              placeholder="Buscar canción, artista o pegar enlace de YouTube..."
               autoComplete="off"
-              className="h-10 pl-9 pr-9 rounded-xl bg-white/[0.06] backdrop-blur-md border-white/10 hover:border-white/20 focus-visible:border-teal-400/50 focus-visible:ring-2 focus-visible:ring-teal-400/20 text-xs transition-all placeholder:text-white/40"
+              className={cn(
+                "h-10 pl-9 rounded-xl bg-white/[0.06] backdrop-blur-md border-white/10 hover:border-white/20 focus-visible:border-teal-400/50 focus-visible:ring-2 focus-visible:ring-teal-400/20 text-xs transition-all placeholder:text-white/40",
+                isYoutubeUrl ? "pr-24" : "pr-9",
+              )}
             />
+            {isYoutubeUrl && (
+              <div className="absolute right-9 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-teal-400/20 border border-teal-400/30 text-[10px] text-teal-300 pointer-events-none select-none">
+                <Link2 className="size-3" />
+                <span>Enlace</span>
+              </div>
+            )}
             {query.length > 0 && (
               <button
                 type="button"
@@ -891,124 +1207,152 @@ function App() {
           </div>
         )}
 
-        {/* Resultados de Búsqueda */}
-        {results.length > 0 && (
-          <div className="flex min-h-0 flex-1 flex-col gap-2">
-            <ScrollArea className="min-h-0 flex-1 pr-1">
-              <ol className="flex flex-col gap-1.5">
-                {searchResults.map((track, index) => {
-                  const isCurrentItemLoading = loadingTrackId === track.id;
-                  const isCurrentTrackPlaying = playerState?.current?.id === track.id;
+        {/* Vista Central: Cola de Reproducción O Resultados / Recientes */}
+        {isQueueOpen ? (
+          <QueuePanel
+            queue={queue}
+            currentTrackId={playerState?.current?.id}
+            onPlayItem={handlePlayQueueIndex}
+            onRemoveItem={handleRemoveFromQueue}
+            onClearQueue={handleClearQueue}
+            onClose={() => setIsQueueOpen(false)}
+          />
+        ) : (
+          <>
+            {/* Resultados de Búsqueda */}
+            {results.length > 0 && (
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                <ScrollArea className="min-h-0 flex-1 pr-1">
+                  <ol className="flex flex-col gap-1.5">
+                    {searchResults.map((track, index) => {
+                      const isCurrentItemLoading = loadingTrackId === track.id;
+                      const isCurrentTrackPlaying = playerState?.current?.id === track.id;
 
-                  return (
-                    <SearchResultItem
-                      key={track.id}
-                      track={track}
-                      isSelected={index === selectedIndex}
-                      isPlaying={isCurrentTrackPlaying}
-                      isLoading={isCurrentItemLoading}
-                      onClick={() => handlePlay(track)}
-                      onMouseEnter={() => setSelectedIndex(index)}
-                    />
-                  );
-                })}
-              </ol>
-            </ScrollArea>
+                      return (
+                        <SearchResultItem
+                          key={track.id}
+                          track={track}
+                          isSelected={index === selectedIndex}
+                          isPlaying={isCurrentTrackPlaying}
+                          isLoading={isCurrentItemLoading}
+                          onClick={() => handlePlay(track)}
+                          onAddToQueue={(e) => handleAddToQueue(track, e)}
+                          onMouseEnter={() => setSelectedIndex(index)}
+                        />
+                      );
+                    })}
+                  </ol>
+                </ScrollArea>
 
-            <footer className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-white/60">
-              <span className="flex items-center gap-1">
-                <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                  ↑↓
-                </kbd>
-                Navegar
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                  Enter
-                </kbd>
-                Reproducir
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                  Espacio
-                </kbd>
-                Play/Pausa
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                  Esc
-                </kbd>
-                Limpiar
-              </span>
-            </footer>
-          </div>
-        )}
+                <footer className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-white/60">
+                  <span className="flex items-center gap-1">
+                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                      ↑↓
+                    </kbd>
+                    Navegar
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                      Enter
+                    </kbd>
+                    Reproducir
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                      Espacio
+                    </kbd>
+                    Play/Pausa
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                      N / P
+                    </kbd>
+                    Sig/Ant
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                      Q
+                    </kbd>
+                    Cola
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                      Esc
+                    </kbd>
+                    Limpiar
+                  </span>
+                </footer>
+              </div>
+            )}
 
-        {/* Historial Reciente (cuando no hay búsqueda activa) */}
-        {results.length === 0 && resultsQuery === "" && recentTracksMemo.length > 0 && (
-          <div className="flex min-h-0 flex-1 flex-col gap-2">
-            <div className="flex items-center justify-between px-1">
-              <span className="flex items-center gap-1.5 text-xs font-medium text-white/70">
-                <Clock className="size-3.5 text-teal-400" />
-                Recientes
-              </span>
-              <button
-                type="button"
-                onClick={clearRecent}
-                className="text-[10px] text-white/50 hover:text-white/90 transition-colors"
-              >
-                Limpiar
-              </button>
-            </div>
-            <ScrollArea className="min-h-0 flex-1 pr-1">
-              <ol className="flex flex-col gap-1.5">
-                {recentTracksMemo.map((track) => {
-                  const isCurrentItemLoading = loadingTrackId === track.id;
-                  const isCurrentTrackPlaying = playerState?.current?.id === track.id;
+            {/* Historial Reciente (cuando no hay búsqueda activa) */}
+            {results.length === 0 && resultsQuery === "" && recentTracksMemo.length > 0 && (
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-white/70">
+                    <Clock className="size-3.5 text-teal-400" />
+                    Recientes
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearRecent}
+                    className="text-[10px] text-white/50 hover:text-white/90 transition-colors"
+                  >
+                    Limpiar
+                  </button>
+                </div>
+                <ScrollArea className="min-h-0 flex-1 pr-1">
+                  <ol className="flex flex-col gap-1.5">
+                    {recentTracksMemo.map((track) => {
+                      const isCurrentItemLoading = loadingTrackId === track.id;
+                      const isCurrentTrackPlaying = playerState?.current?.id === track.id;
 
-                  return (
-                    <RecentTrackItem
-                      key={track.id}
-                      track={track}
-                      isPlaying={isCurrentTrackPlaying}
-                      isLoading={isCurrentItemLoading}
-                      onClick={() => handlePlay(track)}
-                    />
-                  );
-                })}
-              </ol>
-            </ScrollArea>
-          </div>
-        )}
+                      return (
+                        <RecentTrackItem
+                          key={track.id}
+                          track={track}
+                          isPlaying={isCurrentTrackPlaying}
+                          isLoading={isCurrentItemLoading}
+                          onClick={() => handlePlay(track)}
+                          onAddToQueue={(e) => handleAddToQueue(track, e)}
+                        />
+                      );
+                    })}
+                  </ol>
+                </ScrollArea>
+              </div>
+            )}
 
-        {/* Sin resultados de búsqueda */}
-        {!isSearching && resultsQuery !== "" && results.length === 0 && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
-            <div className="size-12 rounded-2xl liquid-pill flex items-center justify-center text-white/50 shadow-md">
-              <Search className="size-6 text-white/40" />
-            </div>
-            <div className="flex flex-col gap-1 max-w-[260px]">
-              <p className="text-xs font-semibold text-white/90">Sin resultados</p>
-              <p className="text-[11px] text-white/60">
-                No se encontró nada para "{resultsQuery}". Intenta con otras palabras clave.
-              </p>
-            </div>
-          </div>
-        )}
+            {/* Sin resultados de búsqueda */}
+            {!isSearching && resultsQuery !== "" && results.length === 0 && (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
+                <div className="size-12 rounded-2xl liquid-pill flex items-center justify-center text-white/50 shadow-md">
+                  <Search className="size-6 text-white/40" />
+                </div>
+                <div className="flex flex-col gap-1 max-w-[260px]">
+                  <p className="text-xs font-semibold text-white/90">Sin resultados</p>
+                  <p className="text-[11px] text-white/60">
+                    No se encontró nada para "{resultsQuery}". Intenta con otras palabras clave.
+                  </p>
+                </div>
+              </div>
+            )}
 
-        {/* Pantalla vacía inicial de concentración */}
-        {results.length === 0 && resultsQuery === "" && recentTracksMemo.length === 0 && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
-            <div className="size-14 rounded-2xl liquid-pill flex items-center justify-center text-teal-300/80 shadow-lg">
-              <Headphones className="size-7" />
-            </div>
-            <div className="flex flex-col gap-1">
-              <p className="text-sm font-medium text-white/90">Espacio de concentración</p>
-              <p className="text-xs text-white/60 max-w-[240px]">
-                Busca cualquier tema en YouTube y empieza tu sesión sin distracciones.
-              </p>
-            </div>
-          </div>
+            {/* Pantalla vacía inicial de concentración */}
+            {results.length === 0 && resultsQuery === "" && recentTracksMemo.length === 0 && (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
+                <div className="size-14 rounded-2xl liquid-pill flex items-center justify-center text-teal-300/80 shadow-lg">
+                  <Headphones className="size-7" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm font-medium text-white/90">Espacio de concentración</p>
+                  <p className="text-xs text-white/60 max-w-[240px]">
+                    Busca cualquier tema en YouTube o pega un enlace directo y empieza tu sesión.
+                  </p>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* Tarjeta Flotante Now Playing (Glassmorphism Líquido) */}
@@ -1022,6 +1366,11 @@ function App() {
             onTogglePlayback={handleTogglePlayback}
             onToggleLoop={handleToggleLoop}
             onStop={handleStop}
+            onNext={handleNext}
+            onPrevious={handlePrevious}
+            onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
+            isQueueOpen={isQueueOpen}
+            queueCount={queue.length}
             onSeekPreview={setDragPosition}
             onSeekCommit={handleSeekCommit}
             onVolumePreview={handleVolumePreview}
