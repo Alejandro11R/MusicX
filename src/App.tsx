@@ -116,16 +116,20 @@ const SearchResultItem = React.memo(function SearchResultItem({
         onMouseEnter={onMouseEnter}
         disabled={isLoading}
       >
-        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm">
-          <img
-            src={track.thumbnail_url}
-            alt=""
-            className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
-            loading="lazy"
-            onError={(e) => {
-              (e.currentTarget as HTMLElement).style.display = "none";
-            }}
-          />
+        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm flex items-center justify-center">
+          {track.thumbnail_url ? (
+            <img
+              src={track.thumbnail_url}
+              alt=""
+              className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+              loading="lazy"
+              onError={(e) => {
+                (e.currentTarget as HTMLElement).style.display = "none";
+              }}
+            />
+          ) : (
+            <Headphones className="size-5 text-teal-300/80" />
+          )}
           {isLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
               <Loader2 className="size-4 animate-spin text-teal-300" />
@@ -202,16 +206,20 @@ const RecentTrackItem = React.memo(function RecentTrackItem({
         onClick={onClick}
         disabled={isLoading}
       >
-        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm">
-          <img
-            src={track.thumbnail_url}
-            alt=""
-            className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
-            loading="lazy"
-            onError={(e) => {
-              (e.currentTarget as HTMLElement).style.display = "none";
-            }}
-          />
+        <div className="relative size-10 shrink-0 overflow-hidden rounded-lg bg-white/5 border border-white/10 shadow-sm flex items-center justify-center">
+          {track.thumbnail_url ? (
+            <img
+              src={track.thumbnail_url}
+              alt=""
+              className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+              loading="lazy"
+              onError={(e) => {
+                (e.currentTarget as HTMLElement).style.display = "none";
+              }}
+            />
+          ) : (
+            <Headphones className="size-5 text-teal-300/80" />
+          )}
           {isLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
               <Loader2 className="size-4 animate-spin text-teal-300" />
@@ -576,14 +584,20 @@ const NowPlaying = React.memo(function NowPlaying({
                 borderStyle: albumColor ? "solid" : undefined,
               }}
             >
-              <img
-                src={current.thumbnail_url}
-                alt=""
-                className="size-full object-cover"
-                onError={(e) => {
-                  (e.currentTarget as HTMLElement).style.display = "none";
-                }}
-              />
+              {current.thumbnail_url ? (
+                <img
+                  src={current.thumbnail_url}
+                  alt=""
+                  className="size-full object-cover"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLElement).style.display = "none";
+                  }}
+                />
+              ) : (
+                <div className="size-full flex items-center justify-center bg-teal-500/10">
+                  <Headphones className="size-6 text-teal-300" />
+                </div>
+              )}
             </div>
           </SpecularRing>
           <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
@@ -1046,6 +1060,34 @@ function App() {
     );
   }, [query]);
 
+  const isLocalAudioPath = useMemo(() => {
+    const t = query.trim();
+    const audioExts = [".mp3", ".flac", ".wav", ".m4a", ".opus", ".ogg", ".aac"];
+    return audioExts.some((ext) => t.toLowerCase().endsWith(ext));
+  }, [query]);
+
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  // Pausar animaciones en segundo plano para mínimo consumo de CPU/GPU
+  useEffect(() => {
+    const updateHiddenState = () => {
+      const isHidden = document.hidden;
+      document.documentElement.setAttribute(
+        "data-window-hidden",
+        isHidden ? "true" : "false",
+      );
+    };
+    updateHiddenState();
+    document.addEventListener("visibilitychange", updateHiddenState);
+    window.addEventListener("blur", updateHiddenState);
+    window.addEventListener("focus", updateHiddenState);
+    return () => {
+      document.removeEventListener("visibilitychange", updateHiddenState);
+      window.removeEventListener("blur", updateHiddenState);
+      window.removeEventListener("focus", updateHiddenState);
+    };
+  }, []);
+
   useEffect(() => {
     function handleGlobalKeyDown(e: KeyboardEvent) {
       const isSearchFocused = document.activeElement === searchInputRef.current;
@@ -1129,6 +1171,25 @@ function App() {
 
   async function runSearch(q: string) {
     if (!q.trim()) return;
+
+    const audioExts = [".mp3", ".flac", ".wav", ".m4a", ".opus", ".ogg", ".aac"];
+    if (audioExts.some((ext) => q.trim().toLowerCase().endsWith(ext))) {
+      const path = q.trim();
+      const name =
+        path.split("/").pop()?.split("\\").pop()?.replace(/\.[^/.]+$/, "") ??
+        "Pista Local";
+      const localTrack: SearchResult = {
+        id: path,
+        title: name,
+        artist: "Archivo Local",
+        duration_seconds: 0,
+        thumbnail_url: "",
+      };
+      setResults([localTrack]);
+      setResultsQuery(q);
+      setSelectedIndex(0);
+      return;
+    }
     
     // Cancelar búsqueda anterior
     searchAbortRef.current?.abort();
@@ -1168,6 +1229,65 @@ function App() {
       setLoadingTrackId(null);
     }
   }
+
+  // Soporte Drag & Drop para reproducir canciones locales instantáneamente
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "over") {
+          setIsDragOver(true);
+        } else if (event.payload.type === "drop") {
+          setIsDragOver(false);
+          const paths = event.payload.paths;
+          const audioExts = [".mp3", ".flac", ".wav", ".m4a", ".opus", ".ogg", ".aac"];
+          const audioPaths = paths.filter((p) =>
+            audioExts.some((ext) => p.toLowerCase().endsWith(ext)),
+          );
+          if (audioPaths.length > 0) {
+            const first = audioPaths[0];
+            const name =
+              first.split("/").pop()?.split("\\").pop()?.replace(/\.[^/.]+$/, "") ??
+              "Pista Local";
+            const firstTrack: SearchResult = {
+              id: first,
+              title: name,
+              artist: "Archivo Local",
+              duration_seconds: 0,
+              thumbnail_url: "",
+            };
+            handlePlay(firstTrack);
+
+            for (let i = 1; i < audioPaths.length; i++) {
+              const path = audioPaths[i];
+              const trackName =
+                path.split("/").pop()?.split("\\").pop()?.replace(/\.[^/.]+$/, "") ??
+                "Pista Local";
+              const trackItem: SearchResult = {
+                id: path,
+                title: trackName,
+                artist: "Archivo Local",
+                duration_seconds: 0,
+                thumbnail_url: "",
+              };
+              addToQueue(trackItem);
+            }
+          }
+        } else {
+          setIsDragOver(false);
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => {
+        console.warn("DragDropEvent no soportado o falló:", err);
+      });
+
+    return () => {
+      unlisten?.();
+    };
+  }, [handlePlay]);
 
   function handleSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
@@ -1328,6 +1448,15 @@ function App() {
     <main className="flex h-screen w-screen p-2.5">
       <MeshBackground playing={isPlaying} />
       <GlassPanel pressed={false} className="relative flex h-full w-full flex-col gap-3 rounded-[24px] p-4 overflow-hidden">
+        {isDragOver && (
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/85 backdrop-blur-md rounded-[24px] border-2 border-dashed border-teal-400 select-none animate-in fade-in duration-150">
+            <Headphones className="size-12 text-teal-300 animate-bounce" />
+            <div className="text-center">
+              <p className="text-sm font-semibold text-white">Suelta canciones aquí</p>
+              <p className="text-xs text-white/60">Reproducción instantánea (.mp3, .flac, .wav, .m4a, .opus)</p>
+            </div>
+          </div>
+        )}
         {/* Barra superior con arrastre nativo y controles Apple Glass */}
         <header
           data-tauri-drag-region
@@ -1381,17 +1510,23 @@ function App() {
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
               onKeyDown={handleSearchKeyDown}
-              placeholder="Buscar canción, artista o pegar enlace de YouTube..."
+              placeholder="Buscar en YouTube, pegar enlace o arrastrar archivo local..."
               autoComplete="off"
               className={cn(
                 "h-10 pl-9 rounded-xl bg-white/[0.06] backdrop-blur-md border-white/10 hover:border-white/20 focus-visible:border-teal-400/50 focus-visible:ring-2 focus-visible:ring-teal-400/20 text-xs transition-all placeholder:text-white/40",
-                isYoutubeUrl ? "pr-24" : "pr-9",
+                isYoutubeUrl || isLocalAudioPath ? "pr-24" : "pr-9",
               )}
             />
             {isYoutubeUrl && (
               <div className="absolute right-9 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-teal-400/20 border border-teal-400/30 text-[10px] text-teal-300 pointer-events-none select-none">
                 <Link2 className="size-3" />
                 <span>Enlace</span>
+              </div>
+            )}
+            {isLocalAudioPath && (
+              <div className="absolute right-9 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-400/20 border border-emerald-400/30 text-[10px] text-emerald-300 pointer-events-none select-none">
+                <Headphones className="size-3" />
+                <span>Local</span>
               </div>
             )}
             {query.length > 0 && (

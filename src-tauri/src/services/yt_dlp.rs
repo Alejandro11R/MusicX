@@ -31,7 +31,7 @@ struct YtDlpEntry {
 
 impl From<YtDlpEntry> for SearchResult {
     fn from(entry: YtDlpEntry) -> Self {
-        let thumbnail_url = format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", entry.id);
+        let thumbnail_url = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", entry.id);
         SearchResult {
             id: entry.id,
             title: entry.title,
@@ -340,14 +340,17 @@ impl YtDlpService {
         let start = Instant::now();
         tracing::debug!(args = ?args, "[yt-dlp] launching search");
 
-        let child = Command::new("yt-dlp")
-            .args(args)
+        let mut cmd = Command::new("yt-dlp");
+        cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(CadenceError::YtDlpSpawn)?;
+            .kill_on_drop(true);
+
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000);
+
+        let child = cmd.spawn().map_err(CadenceError::YtDlpSpawn)?;
 
         tracing::debug!(pid = ?child.id(), elapsed = ?start.elapsed(), "[yt-dlp] spawned");
 
@@ -394,14 +397,17 @@ impl YtDlpService {
         let start = Instant::now();
         tracing::debug!(args = ?args, "[yt-dlp] launching resolve");
 
-        let child = Command::new("yt-dlp")
-            .args(args)
+        let mut cmd = Command::new("yt-dlp");
+        cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(CadenceError::YtDlpSpawn)?;
+            .kill_on_drop(true);
+
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000);
+
+        let child = cmd.spawn().map_err(CadenceError::YtDlpSpawn)?;
 
         tracing::debug!(pid = ?child.id(), elapsed = ?start.elapsed(), "[yt-dlp] spawned");
 
@@ -510,7 +516,7 @@ mod tests {
             ie_key: Some("Youtube".to_string()),
         };
         let result = SearchResult::from(entry);
-        assert_eq!(result.thumbnail_url, "https://i.ytimg.com/vi/abc123/hqdefault.jpg");
+        assert_eq!(result.thumbnail_url, "https://i.ytimg.com/vi/abc123/mqdefault.jpg");
     }
 
     #[test]

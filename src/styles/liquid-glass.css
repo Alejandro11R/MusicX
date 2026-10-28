@@ -216,6 +216,19 @@
   }
 }
 
+/* ===== Modo Ultra-Rendimiento / Ahorro de Recursos ===== */
+:root[data-window-hidden="true"] .mesh-blob,
+:root[data-window-hidden="true"] .specular-ring::after,
+:root[data-low-power="true"] .mesh-blob,
+:root[data-low-power="true"] .specular-ring::after {
+  animation-play-state: paused !important;
+}
+
+:root[data-low-power="true"] .glass-panel {
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+}
+
 /* ===== Reducido de movimiento (accesibilidad) ===== */
 @media (prefers-reduced-motion: reduce) {
   .mesh-blob,

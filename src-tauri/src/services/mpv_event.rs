@@ -298,9 +298,19 @@ impl MpvPlayer {
         let mut cmd = Command::new("mpv");
         cmd.arg("--idle=yes")
             .arg("--no-video")
+            .arg("--vo=null")
+            .arg("--no-audio-display")
+            .arg("--osc=no")
+            .arg("--ytdl=no")
+            .arg("--gapless-audio=yes")
+            .arg("--demuxer-max-bytes=32MiB")
+            .arg("--demuxer-max-back-bytes=8MiB")
+            .arg("--cache-secs=30")
             .arg("--really-quiet")
-            .arg("--af=dynaudnorm")
             .arg(ipc_arg);
+
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000);
 
         if !cfg!(test) {
             if Path::new("/usr/lib/mpv-mpris/mpris.so").exists() {
@@ -653,7 +663,7 @@ impl MpvPlayer {
         self.status_rx.clone()
     }
 
-    async fn set_property(&self, name: &str, value: Value) -> Result<(), CadenceError> {
+    pub async fn set_property(&self, name: &str, value: Value) -> Result<(), CadenceError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.cmd_tx
             .send(MpvCommand::SetProperty {
@@ -664,6 +674,10 @@ impl MpvPlayer {
             .await
             .map_err(|_| CadenceError::MpvConnectionClosed)?;
         reply_rx.await.map_err(|_| CadenceError::MpvConnectionClosed)?
+    }
+
+    pub async fn set_media_title(&self, title: &str) -> Result<(), CadenceError> {
+        self.set_property("force-media-title", json!(title)).await
     }
 
     pub async fn set_audio_filter(&self, filter: &str) -> Result<(), CadenceError> {

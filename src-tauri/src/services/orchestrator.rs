@@ -60,6 +60,10 @@ impl PlaybackController {
         self.mpv.set_speed(speed).await
     }
 
+    pub async fn set_media_title(&self, title: &str) -> Result<(), CadenceError> {
+        self.mpv.set_media_title(title).await
+    }
+
     /// Obtiene estado instantáneo (sin IPC).
     pub fn status(&self) -> MpvStatus {
         self.mpv.status()
@@ -88,6 +92,17 @@ impl TrackResolver {
     }
 
     pub async fn resolve_audio(&self, video_id: &str) -> Result<String, CadenceError> {
+        if video_id.starts_with("local:") {
+            let path = video_id.trim_start_matches("local:");
+            return Ok(path.to_string());
+        }
+        if video_id.starts_with("file://") {
+            let path = video_id.trim_start_matches("file://");
+            return Ok(path.to_string());
+        }
+        if std::path::Path::new(video_id).is_file() {
+            return Ok(video_id.to_string());
+        }
         self.yt_dlp.resolve_audio(video_id).await
     }
 
@@ -553,8 +568,20 @@ impl PlayerOrchestrator {
             tracing::warn!(error = %err, "failed to apply volume/loop on play");
         }
 
+        // Formatear título limpio en mpv (para MPRIS, controles de medios en Windows y lockscreens)
+        let display_title = if let Some(ref artist) = track.artist {
+            format!("{} - {}", artist, track.title)
+        } else {
+            track.title.clone()
+        };
+        let _ = self.controller.set_media_title(&display_title).await;
+
         self.set_mode(PlayerMode::Playing).await;
         let _ = self.event_tx.send(OrchestratorEvent::TrackStarted(track));
+
+        // Queue Prefetch: Resolver el audio del siguiente tema en segundo plano
+        self.prefetch_next_track().await;
+
         Ok(())
     }
 
@@ -690,6 +717,8 @@ impl PlayerOrchestrator {
         let item = QueueItem { id, track };
         queue.push(item.clone());
         let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+        drop(queue);
+        self.prefetch_next_track().await;
         item
     }
 
@@ -711,7 +740,42 @@ impl PlayerOrchestrator {
         };
         queue.insert(insert_idx, item.clone());
         let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+        drop(queue);
+        self.prefetch_next_track().await;
         item
+    }
+
+    /// Precarga la URL del siguiente tema en segundo plano si existe en la cola.
+    pub async fn prefetch_next_track(&self) {
+        let next_track_id = {
+            let queue = self.queue.read().await;
+            let current_idx = *self.current_queue_index.read().await;
+            if let Some(idx) = current_idx {
+                if idx + 1 < queue.len() {
+                    Some(queue[idx + 1].track.id.clone())
+                } else if self.desired_loop.load(Ordering::SeqCst) && !queue.is_empty() {
+                    Some(queue[0].track.id.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(next_id) = next_track_id {
+            if next_id.starts_with("local:")
+                || next_id.starts_with("file://")
+                || std::path::Path::new(&next_id).is_file()
+            {
+                return;
+            }
+            let resolver = self.resolver.clone();
+            tauri::async_runtime::spawn(async move {
+                tracing::debug!(next_id = %next_id, "[prefetch] pre-resolving next track audio stream");
+                let _ = resolver.resolve_audio(&next_id).await;
+            });
+        }
     }
 
     pub async fn remove_from_queue(&self, item_id: &str) -> bool {
@@ -826,12 +890,12 @@ impl PlayerOrchestrator {
     ) -> Result<(), CadenceError> {
         use crate::models::player_state::AudioPreset;
         let filter = match preset {
-            AudioPreset::Normal => "dynaudnorm",
+            AudioPreset::Normal => "",
             AudioPreset::Lofi => "lavfi=[highpass=f=200,lowpass=f=4000]",
             AudioPreset::BassBoost => "lavfi=[equalizer=f=60:width_type=h:width=50:g=10]",
             AudioPreset::Loudnorm => "lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]",
             AudioPreset::SlowedReverb => "lavfi=[aecho=0.8:0.88:60:0.4]",
-            AudioPreset::Nightcore => "lavfi=[asetrate=44100*1.2,atempo=1.05]",
+            AudioPreset::Nightcore => "lavfi=[asetrate=48000*1.2,atempo=1.05]",
         };
         self.controller.set_audio_filter(filter).await
     }
