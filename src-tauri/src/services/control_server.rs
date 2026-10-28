@@ -74,7 +74,7 @@ pub struct ControlServer;
 
 impl ControlServer {
     pub fn spawn(orchestrator: Arc<PlayerOrchestrator>, focus: Arc<FocusEngine>) {
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             let socket_path = control_socket_path();
             tracing::info!(path = %socket_path.display(), "Starting Cadence Control Server");
 
@@ -94,7 +94,7 @@ impl ControlServer {
                         Ok((stream, _)) => {
                             let orch = orchestrator.clone();
                             let foc = focus.clone();
-                            tokio::spawn(async move {
+                            tauri::async_runtime::spawn(async move {
                                 let (reader, writer) = stream.into_split();
                                 Self::handle_client(reader, writer, orch, foc).await;
                             });
@@ -126,7 +126,7 @@ impl ControlServer {
                     if server.connect().await.is_ok() {
                         let orch = orchestrator.clone();
                         let foc = focus.clone();
-                        tokio::spawn(async move {
+                        tauri::async_runtime::spawn(async move {
                             let (reader, writer) = tokio::io::split(server);
                             Self::handle_client(reader, writer, orch, foc).await;
                         });

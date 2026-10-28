@@ -77,7 +77,7 @@ impl FocusEngine {
         });
 
         let worker = engine.clone();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             worker.run_ticker().await;
         });
 
