@@ -167,6 +167,18 @@ export function setFocusAutoPause(enabled: boolean): Promise<void> {
   return invoke("set_focus_auto_pause", { enabled });
 }
 
+export function setFocusDurations(
+  focusSecs: number,
+  shortBreakSecs: number,
+  longBreakSecs: number,
+): Promise<void> {
+  return invoke("set_focus_durations", {
+    focusSecs,
+    shortBreakSecs,
+    longBreakSecs,
+  });
+}
+
 export function listenFocusEvents(callback: (state: FocusState) => void): Promise<UnlistenFn> {
   return listen<FocusState>("focus-state-changed", (e) => callback(e.payload));
 }

@@ -184,6 +184,7 @@ pub fn run() {
             commands::playback::skip_focus,
             commands::playback::get_focus_state,
             commands::playback::set_focus_auto_pause,
+            commands::playback::set_focus_durations,
             commands::player::state,
             commands::player::health,
             commands::player::subscribe_events,

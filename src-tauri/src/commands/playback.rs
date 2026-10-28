@@ -184,3 +184,14 @@ pub async fn set_focus_auto_pause(
     focus.set_auto_pause(enabled).await;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn set_focus_durations(
+    focus: tauri::State<'_, Arc<FocusEngine>>,
+    focus_secs: u32,
+    short_break_secs: u32,
+    long_break_secs: u32,
+) -> Result<(), CadenceError> {
+    focus.set_durations(focus_secs, short_break_secs, long_break_secs).await;
+    Ok(())
+}

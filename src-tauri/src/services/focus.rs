@@ -59,6 +59,9 @@ pub struct FocusEngine {
     state_tx: watch::Sender<FocusState>,
     event_tx: broadcast::Sender<FocusEvent>,
     auto_pause: AtomicBool,
+    focus_secs: std::sync::atomic::AtomicU32,
+    short_break_secs: std::sync::atomic::AtomicU32,
+    long_break_secs: std::sync::atomic::AtomicU32,
 }
 
 impl FocusEngine {
@@ -74,6 +77,9 @@ impl FocusEngine {
             state_tx,
             event_tx,
             auto_pause: AtomicBool::new(true),
+            focus_secs: std::sync::atomic::AtomicU32::new(DEFAULT_FOCUS_SECS),
+            short_break_secs: std::sync::atomic::AtomicU32::new(DEFAULT_SHORT_BREAK_SECS),
+            long_break_secs: std::sync::atomic::AtomicU32::new(DEFAULT_LONG_BREAK_SECS),
         });
 
         let worker = engine.clone();
@@ -102,10 +108,11 @@ impl FocusEngine {
             return;
         }
 
+        let focus_secs = self.focus_secs.load(Ordering::SeqCst);
         if state.phase == FocusPhase::Idle {
             state.phase = FocusPhase::Focus;
-            state.remaining_seconds = DEFAULT_FOCUS_SECS;
-            state.total_seconds = DEFAULT_FOCUS_SECS;
+            state.remaining_seconds = focus_secs;
+            state.total_seconds = focus_secs;
         }
 
         state.is_running = true;
@@ -147,10 +154,11 @@ impl FocusEngine {
         let mut deadline = self.deadline.write().await;
         *deadline = None;
 
+        let focus_secs = self.focus_secs.load(Ordering::SeqCst);
         *state = FocusState {
             phase: FocusPhase::Idle,
-            remaining_seconds: DEFAULT_FOCUS_SECS,
-            total_seconds: DEFAULT_FOCUS_SECS,
+            remaining_seconds: focus_secs,
+            total_seconds: focus_secs,
             is_running: false,
             sessions_completed: state.sessions_completed,
             auto_pause_on_break: self.auto_pause.load(Ordering::SeqCst),
@@ -173,6 +181,24 @@ impl FocusEngine {
         let _ = self.event_tx.send(FocusEvent::StateUpdated(state.clone()));
     }
 
+    pub async fn set_durations(&self, focus_secs: u32, short_break_secs: u32, long_break_secs: u32) {
+        let focus_secs = focus_secs.clamp(60, 180 * 60);
+        let short_break_secs = short_break_secs.clamp(30, 60 * 60);
+        let long_break_secs = long_break_secs.clamp(60, 120 * 60);
+
+        self.focus_secs.store(focus_secs, Ordering::SeqCst);
+        self.short_break_secs.store(short_break_secs, Ordering::SeqCst);
+        self.long_break_secs.store(long_break_secs, Ordering::SeqCst);
+
+        let mut state = self.state.write().await;
+        if state.phase == FocusPhase::Idle || !state.is_running {
+            state.remaining_seconds = focus_secs;
+            state.total_seconds = focus_secs;
+            let _ = self.state_tx.send(state.clone());
+            let _ = self.event_tx.send(FocusEvent::StateUpdated(state.clone()));
+        }
+    }
+
     async fn advance_phase(&self, finished_phase: FocusPhase) {
         let mut state = self.state.write().await;
         let next_phase = match finished_phase {
@@ -187,11 +213,15 @@ impl FocusEngine {
             FocusPhase::ShortBreak | FocusPhase::LongBreak => FocusPhase::Focus,
         };
 
+        let focus_secs = self.focus_secs.load(Ordering::SeqCst);
+        let short_break_secs = self.short_break_secs.load(Ordering::SeqCst);
+        let long_break_secs = self.long_break_secs.load(Ordering::SeqCst);
+
         let (total_secs, should_pause_audio) = match next_phase {
-            FocusPhase::Focus => (DEFAULT_FOCUS_SECS, false),
-            FocusPhase::ShortBreak => (DEFAULT_SHORT_BREAK_SECS, true),
-            FocusPhase::LongBreak => (DEFAULT_LONG_BREAK_SECS, true),
-            FocusPhase::Idle => (DEFAULT_FOCUS_SECS, false),
+            FocusPhase::Focus => (focus_secs, false),
+            FocusPhase::ShortBreak => (short_break_secs, true),
+            FocusPhase::LongBreak => (long_break_secs, true),
+            FocusPhase::Idle => (focus_secs, false),
         };
 
         state.phase = next_phase;
@@ -230,14 +260,14 @@ impl FocusEngine {
         loop {
             interval.tick().await;
 
+            if !self.state.read().await.is_running {
+                continue;
+            }
+
             let mut phase_to_advance: Option<FocusPhase> = None;
 
             {
                 let mut state = self.state.write().await;
-                if !state.is_running {
-                    continue;
-                }
-
                 let deadline_guard = self.deadline.read().await;
                 if let Some(target) = *deadline_guard {
                     let now = Instant::now();

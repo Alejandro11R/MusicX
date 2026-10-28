@@ -1,0 +1,14 @@
+# Definición de propietarios de código para Cadence
+# Cada Pull Request que toque estos archivos requerirá tu aprobación explícita antes de mergearse.
+
+* @Alejandro11R
+
+# Rutas críticas de seguridad y cadena de suministro
+/.github/               @Alejandro11R
+/src-tauri/             @Alejandro11R
+Cargo.toml              @Alejandro11R
+Cargo.lock              @Alejandro11R
+package.json            @Alejandro11R
+package-lock.json       @Alejandro11R
+vite.config.ts          @Alejandro11R
+tauri.conf.json         @Alejandro11R
