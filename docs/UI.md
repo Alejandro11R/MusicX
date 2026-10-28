@@ -166,3 +166,79 @@ The secondary features originally deferred have now been implemented with Liquid
     - 🌙 `Slowed+Reverb`: Stereo echo effect combined with `0.88x` playback speed.
     - ⚡ `Nightcore`: Pitch-shifting sample rate (`asetrate=44100*1.2`) and tempo speedup (`1.05x`).
   - Speed Modulation Controller: Step through playback speeds (`0.85x`, `0.90x`, `0.95x`, `1.00x`, `1.05x`, `1.10x`, `1.15x`, `1.20x`, `1.25x`).
+
+## Focus Studio (2026-10-28)
+
+The Pomodoro/Focus mode was originally a `bg-black/92` full-screen overlay. It
+covered the search/results, hid the Now Playing bar, and left the timer floating
+in a void. The redesign treats Focus as a **peer space to the Library**, not a
+modal.
+
+### Decision: integrated central view
+
+```
+┌──────────────────────────────────────────────┐
+│ 🎵 Cadence        [◉ Focus 24:59 ▮] [–] [×]  │  ← header stays visible
+├──────────────────────────────────────────────┤
+│  Focus Studio                                │
+│   ◉ Enfoque · 34%          ● ● ○ ○   1 ses.  │
+│                                              │
+│              ╭──────────╮                    │
+│              │  16:37   │   ← ring + aura    │
+│              ╰──────────╯                    │
+│                                              │
+│   [ Focus 25 ] [ Flow 50 ] [ Deep Work 90 ]  │
+│   [↺]      [ Pausar ]      [⏭]               │
+│   Auto-pausar música en descansos      [ ● ] │
+│   ♪ Sonando para concentrarte · track        │
+├──────────────────────────────────────────────┤
+│  ▣ track · progress · ⏯ ⏭ ♫                 │  ← compact music dock
+└──────────────────────────────────────────────┘
+```
+
+Why not a floating glass panel: the window is 430×660. A floating panel would
+either cover the library or compete with the Now Playing card, and a scrim
+would reintroduce the same "curtain" problem. The central view keeps the
+header, the drag region, the library one Esc away, and music always reachable.
+
+In Focus the full Now Playing card is swapped for `FocusNowPlayingDock`
+(artwork, title, progress, play/pause, next, back-to-library). The full card
+returns on exit. This is the one intentional compromise: the timer needs
+vertical room in a 660px window, but music controls are never hidden.
+
+### Component map
+
+`src/components/focus/FocusStudio.tsx`
+
+- `FocusStudio` — shell; phase header, ring, presets, controls, music card.
+- `FocusAura` — radial teal/amber atmosphere; breathes only while running.
+- `FocusRing` — SVG ring (gradient stroke, rounded caps, glow, tip dot,
+  watch-style ticks) + glass inner disc. Uses a container query so the time
+  scales with the ring at short window heights.
+- `FocusPresets` — 25 Focus / 50 Flow / 90 Deep Work; disabled while running
+  or during a break.
+- `AutoPauseSwitch` — real `role="switch"` toggle, not a raw checkbox.
+- `FocusMusicCard` — "Sonando para concentrarte" + track + library shortcut.
+- `FocusWidget` — header pill with phase, time, play/pause and a 2px progress
+  bar on its bottom edge.
+- `FocusNowPlayingDock` — compact persistent music transport in Focus.
+
+`src/styles/focus.css` — only `focus-breathe` (transform/opacity) and the ring
+stroke transition. No rotating gradients, no animated blur; paused when the
+window is hidden or low-power, disabled with `prefers-reduced-motion`.
+
+### Tokens
+
+- Focus: teal `#5eead4 → #10b981`, glow `rgba(45,212,191,.55)`.
+- Break: amber `#fde68a → #f59e0b`, glow `rgba(251,191,36,.5)`.
+- Surfaces stay on the existing glass tokens; no new theme vocabulary.
+- Primary action is a single line (`whitespace-nowrap`), 44px tall, with a
+  static top highlight and a colored glow.
+
+### Interaction
+
+- `Shift+F` opens/closes Focus Studio.
+- `F` starts/pauses the timer from anywhere.
+- `Esc` leaves Focus Studio; the timer keeps running.
+- `/` or `Ctrl/Cmd+K` returns to the library and focuses search.
+- `Space`, `N`, `P` keep controlling music while the timer runs.

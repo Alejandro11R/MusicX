@@ -52,11 +52,11 @@ type FocusTone = {
 };
 
 const TEAL_TONE: FocusTone = {
-  from: "#5eead4",
-  to: "#10b981",
-  glow: "rgba(45, 212, 191, 0.55)",
-  aura: "rgba(45, 212, 191, 0.16)",
-  auraSoft: "rgba(16, 185, 129, 0.08)",
+  from: "var(--focus-from)",
+  to: "var(--focus-to)",
+  glow: "var(--focus-glow)",
+  aura: "var(--focus-aura)",
+  auraSoft: "var(--focus-aura-soft)",
   text: "text-teal-200",
   dot: "bg-teal-300 shadow-[0_0_8px_rgba(45,212,191,0.8)]",
   iconChip: "border-teal-300/25 bg-teal-400/10 text-teal-200",
@@ -67,11 +67,11 @@ const TEAL_TONE: FocusTone = {
 };
 
 const AMBER_TONE: FocusTone = {
-  from: "#fde68a",
-  to: "#f59e0b",
-  glow: "rgba(251, 191, 36, 0.5)",
-  aura: "rgba(251, 191, 36, 0.14)",
-  auraSoft: "rgba(245, 158, 11, 0.07)",
+  from: "var(--break-from)",
+  to: "var(--break-to)",
+  glow: "var(--break-glow)",
+  aura: "var(--break-aura)",
+  auraSoft: "var(--break-aura-soft)",
   text: "text-amber-200",
   dot: "bg-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.8)]",
   iconChip: "border-amber-300/25 bg-amber-400/10 text-amber-200",
@@ -168,7 +168,7 @@ function FocusAura({
       <div className="absolute left-1/2 top-[40%] -translate-x-1/2 -translate-y-1/2">
         <div
           className={cn(
-            "size-[340px] rounded-full blur-3xl",
+            "size-[340px] rounded-full opacity-70 blur-3xl",
             isRunning && "focus-aura",
           )}
           style={{
@@ -238,18 +238,6 @@ function FocusRing({
           background: `radial-gradient(circle, ${tone.aura} 0%, transparent 70%)`,
         }}
       />
-
-      {/* Halo cónico giratorio: sólo cuando la sesión está viva. */}
-      {isRunning && (
-        <div className="pointer-events-none absolute -inset-3 rounded-full opacity-25 blur-xl">
-          <div
-            className="focus-halo size-full rounded-full"
-            style={{
-              background: `conic-gradient(from 0deg, transparent 0deg, ${tone.glow} 52deg, transparent 118deg, transparent 360deg)`,
-            }}
-          />
-        </div>
-      )}
 
       <svg
         viewBox="0 0 100 100"
@@ -716,10 +704,10 @@ export const FocusStudio = React.memo(function FocusStudio({
                 tone.button,
               )}
             >
-              {/* Brillo que recorre el botón. */}
+              {/* Brillo estático en la mitad superior: vidrio, no animación. */}
               <span
                 aria-hidden
-                className="focus-shimmer pointer-events-none absolute inset-0 bg-[linear-gradient(110deg,transparent_20%,rgba(255,255,255,0.35)_50%,transparent_80%)] opacity-40 mix-blend-overlay"
+                className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.28),transparent_55%)] opacity-50 mix-blend-overlay"
               />
               <span className="relative flex items-center gap-2 whitespace-nowrap">
                 {isRunning ? (

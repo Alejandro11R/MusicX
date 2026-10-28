@@ -4,6 +4,23 @@
  * Todo respeta prefers-reduced-motion y se pausa con la ventana oculta.
  */
 
+/* Tokens propios del modo Focus: el resto de la app sigue usando los tokens
+ * de vidrio. Así el anillo, el aura y los glows se pueden retematizar sin
+ * tocar el componente. */
+:root {
+  --focus-from: #5eead4;
+  --focus-to: #10b981;
+  --focus-glow: rgba(45, 212, 191, 0.55);
+  --focus-aura: rgba(45, 212, 191, 0.16);
+  --focus-aura-soft: rgba(16, 185, 129, 0.08);
+
+  --break-from: #fde68a;
+  --break-to: #f59e0b;
+  --break-glow: rgba(251, 191, 36, 0.5);
+  --break-aura: rgba(251, 191, 36, 0.14);
+  --break-aura-soft: rgba(245, 158, 11, 0.07);
+}
+
 @layer utilities {
   /* Scroll sin barra: el estudio se desliza sin ruido visual. */
   .no-scrollbar {
@@ -21,21 +38,9 @@
     will-change: transform, opacity;
   }
 
-  /* Halo cónico que gira muy despacio detrás del anillo. */
-  .focus-halo {
-    animation: focus-spin 28s linear infinite;
-    will-change: transform;
-  }
-
   /* El trazo del anillo se actualiza suave, segundo a segundo. */
   .focus-ring-progress {
     transition: stroke-dashoffset 700ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  /* Brillo que recorre el borde del botón principal. */
-  .focus-shimmer {
-    background-size: 220% 100%;
-    animation: focus-shimmer 6s ease-in-out infinite;
   }
 }
 
@@ -51,37 +56,14 @@
   }
 }
 
-@keyframes focus-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes focus-shimmer {
-  0%,
-  100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-}
-
 /* La ventana oculta o el modo de bajo consumo congelan el ambiente. */
 :root[data-window-hidden="true"] .focus-aura,
-:root[data-window-hidden="true"] .focus-halo,
-:root[data-low-power="true"] .focus-aura,
-:root[data-low-power="true"] .focus-halo {
+:root[data-low-power="true"] .focus-aura {
   animation-play-state: paused !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .focus-aura,
-  .focus-halo,
-  .focus-shimmer {
+  .focus-aura {
     animation: none !important;
   }
 
