@@ -29,38 +29,37 @@ and, for now, the only one implemented.
 
 ## Layout
 
-A single floating panel, not a full desktop-app window layout:
+A single floating panel with a collapsible sliding Queue drawer:
 
 ```
-┌──────────────────────────────┐
-│ Cadence                   ⚙  │
-├──────────────────────────────┤
-│ 🔍 Search...                 │
-├──────────────────────────────┤
-│ ▶ Believer                   │
-│ ▶ 505                        │
-│ ▶ PIÉNSALO                   │
-├──────────────────────────────┤
-│ ♪ Playing                    │
-│ Junior H — PIÉNSALO          │
-│ ⏮  ⏯  ⏭                     │
-│ ─────●──────────────         │
-└──────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ 🎵 Cadence                     [–] [□] [×]   │
+├──────────────────────────────────────────────┤
+│ 🔍 Search or paste YouTube URL...            │
+│    [YouTube URL badge]                       │
+├──────────────────────────────────────────────┤
+│ Resultados / Recientes                       │
+│ ▶ Believer                               [+] │
+│ ▶ 505                                    [+] │
+│ ▶ PIÉNSALO                               [+] │
+├──────────────────────────────────────────────┤
+│ 📋 Cola de reproducción (3)                  │
+│   • Track 1 (Reproduciendo)              [×] │
+│   • Track 2                          [▶] [×] │
+│   • Track 3                          [▶] [×] │
+├──────────────────────────────────────────────┤
+│ ♪ Now Playing                                │
+│ Junior H — PIÉNSALO                          │
+│ ⏮  ⏯  ⏭    🔁 [=====●=====] 🔊 📋 (3)      │
+└──────────────────────────────────────────────┘
 ```
 
-Three zones, always in this order, nothing else:
+Core zones:
 
-1. **Search** — a single input. This is the primary action; it should read
-   as the obvious first thing to interact with, not compete with anything
-   else for attention.
-2. **Results** — a plain list, replaces itself on every search. No
-   pagination, no infinite scroll, no persistent history view.
-3. **Now playing** — always present at the bottom once something has been
-   played, even after the result list is cleared by a new search. Track
-   title/artist, transport controls, a slim progress indicator, volume.
-
-No sidebar. No settings screen beyond what genuinely needs one later. No
-second window.
+1. **Search & URL input** — single input supporting search queries and direct YouTube URLs.
+2. **Results & History** — live search results or recent tracks with instant play or `+` (add to queue).
+3. **Queue drawer (collapsible)** — displays upcoming tracks, active song indicator, and queue management controls.
+4. **Now Playing bar** — persistent playback bar with transport buttons (Previous, Play/Pause, Next, Loop), seek scrubber, volume control, and queue toggle.
 
 ## Design tokens
 
@@ -127,10 +126,26 @@ result list rows themselves.
   row), never a modal. Matches `CadenceError::user_message()` on the
   backend: short, plain language, no raw process output.
 
-## What's deliberately not decided yet
+## Phase 2 Evolutions (Implemented)
 
-No queue UI, no history UI, no keyboard-navigation styling, no
-global-shortcut affordance. These were explicitly named as "second phase"
-features driven by actual daily use — designing their visuals now would be
-the same speculative-work mistake the backend spent several commits
-avoiding.
+The secondary features originally deferred have now been implemented with Liquid Glass styling:
+
+- **Queue Drawer (`QueuePanel`):**
+  - Collapsible overlay with backdrop-filter blur (`bg-background/80 backdrop-blur-md`).
+  - Badge counter on the queue toggle button in the transport bar.
+  - Quick actions per track: play immediately, delete from queue (`×`), or clear all.
+  - Active track highlight with subtle `playing` accent.
+- **Track Actions in Search & History:**
+  - Added an intuitive `+` icon button on each track row to append directly to the queue without interrupting current playback.
+- **Keyboard Navigation & Global Shortcuts:**
+  - `Space`: Play / Pause toggle.
+  - `N`: Next track in queue.
+  - `P`: Previous track in queue.
+  - `Q`: Toggle Queue panel drawer.
+  - `M`: Toggle Mute.
+  - `L`: Toggle Loop mode.
+  - `Escape`: Close queue panel or dismiss search results.
+  - `Left / Right Arrow`: Seek backward / forward (5 seconds).
+  - `Up / Down Arrow`: Adjust volume (5% increments).
+- **Direct YouTube URL Recognition:**
+  - An inline badge signals immediately when a valid YouTube video URL or ID is pasted into the search bar.

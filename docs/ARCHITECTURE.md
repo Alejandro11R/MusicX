@@ -23,23 +23,23 @@ sessions: search, press Enter, keep working.
 
 ```
 React (UI)
-   │  invoke()
+   │  invoke() commands / listen() events
    ▼
-Tauri commands            — thin, no logic, just delegate
+Tauri Commands & Events    — thin delegation + broadcast channels
    │
    ▼
-PlayerService              — owns the mpv connection + "what's playing"
-   │                    │
-   ▼                    ▼
-yt_dlp::search /    MpvPlayer
-yt_dlp::resolve_audio     │  JSON over a Unix socket
-   │                      ▼
-   ▼                     mpv (child process)
-YouTube (via yt-dlp)
+PlayerOrchestrator         — state machine, queue manager, concurrency coordinator
+   ├── TrackResolver       — yt-dlp caching (TTL), concurrency semaphore & circuit breaker
+   └── MpvEventService     — dedicated task & IPC event loop over Unix socket
+         │
+         ▼
+        mpv (background child process)
 ```
 
-Search and playback are two separate paths that only meet inside
-`PlayerService::play()`: resolve a track's audio URL, then hand it to mpv.
+Search, queueing, and playback interact through `PlayerOrchestrator`:
+1. Search queries or direct YouTube URLs resolve lightweight metadata via `yt_dlp::search`.
+2. When playing or queueing, `PlayerOrchestrator` manages track ordering, queue indices, and stream resolution via `TrackResolver`.
+3. Commands to `mpv` flow through `MpvEventService`, which maintains a persistent Unix socket, observes properties, and broadcasts state changes reactively back to the frontend.
 
 ## Decisions
 
@@ -50,22 +50,32 @@ low resource usage, and exposes a documented JSON IPC protocol
 (`--input-ipc-server`) instead of requiring a library binding. Cadence spawns
 one mpv process at startup (`--idle=yes`, `--no-video`) and keeps it alive
 for the life of the app, controlling it entirely through that socket —
-`services/mpv.rs` is the only file that knows the socket exists.
+`services/mpv_event.rs` is the only module that interfaces with the socket.
 
 The IPC connection is **persistent**, not reopened per command. Recreating
 the `BufReader` on every call was tried and rejected early: mpv interleaves
 unsolicited events with command replies on the same socket, and a
 short-lived reader silently drops whatever was buffered but unread between
-calls. The reader/writer halves live in `MpvPlayer` for the connection's
-whole lifetime instead.
+calls. A dedicated background event loop reads raw JSON messages from mpv,
+dispatches responses to waiters, monitors playback properties (`observe_property`),
+and emits clean events across broadcast channels.
 
 ### yt-dlp for search and audio resolution
 
 Handles YouTube's extraction logic (which changes often) so Cadence doesn't
-have to. Used for two things only: turning a text query into candidate
+have to. Used for two things: turning a text query or direct URL into candidate
 videos, and turning a video ID into a direct, playable audio-only stream
 URL. Never used to download files — everything is streamed by handing mpv a
 URL yt-dlp resolved.
+
+### Direct YouTube URLs & Single Video Resolution
+
+Cadence supports both natural language search and direct YouTube video URLs or IDs
+(including `youtu.be`, `watch?v=`, `shorts/`, `music.youtube.com`, and raw 11-char IDs).
+
+- `extract_youtube_video_id()` extracts the ID via pattern matching before querying `yt-dlp`.
+- Direct URLs bypass `ytsearch10:` query prefixes and query the exact video directly.
+- **The Single Video Deserialization Quirk:** When `yt-dlp --flat-playlist -j` queries a single video URL, the returned metadata JSON has `ie_key: null` rather than `"Youtube"`. Previously, this caused serde deserialization failure. Making `ie_key: Option<String>` with default fallback resolved this bug while maintaining playlist filtering.
 
 ### `search()` and `resolve_audio()` are separate functions
 
@@ -75,9 +85,9 @@ lifetimes:
 - `search()` returns metadata (id, title, duration, thumbnail) — cheap,
   meant to be shown in a list, and stable.
 - `resolve_audio()` returns a direct stream URL that YouTube signs with a
-  short expiry. It is **never persisted** — a track's URL is re-resolved
-  every time it's actually played, including replaying the same track twice
-  in a row.
+  short expiry. To balance responsiveness and quota limits, signed URLs are
+  cached with a TTL derived from their `expire` timestamp (capped at 30 min,
+  with safety margins).
 
 Merging them would couple "list search results" to "resolve every result's
 playable URL immediately," which is both slower and mostly wasted work: the
@@ -123,28 +133,38 @@ moment favorites, history, or playlists become real features — not before,
 since designing a schema for hypothetical future data is exactly the kind
 of speculative work this project has been deliberately avoiding.
 
-### `PlayerService`, not a `Player` trait
+### `PlayerOrchestrator`: Event-Driven Concurrency & Granular State
 
-`services/player.rs` owns the mpv connection and the currently-loaded track,
-and is a concrete struct, not a trait with `MpvPlayer` as its one
-implementation. A trait was considered and rejected: there's no second
-player backend planned, Rust makes "extract a trait later" a mechanical,
-compiler-guided refactor when a second implementation actually shows up, and
-an async trait today would mean pulling in `async-trait` and `Box<dyn
-Player>` to pay for a flexibility nothing uses yet.
+The legacy `PlayerService` (which wrapped everything in a single global `Mutex`) was
+replaced by `PlayerOrchestrator` (`services/orchestrator.rs`).
 
-`PlaybackStatus` is derived from `(current_track, mpv's paused flag)` on
-every `state()` call rather than tracked as separate mutable state — it
-can't drift out of sync with what mpv is actually doing, because there's
-nothing to drift.
+- **Granular synchronization:** Instead of blocking playback during long yt-dlp operations,
+  locks are split between `current_track`, `queue`, `desired_loop`, and atomic playback positions.
+- **Instant status reads:** `status()` reads directly from atomic values and watch channels without
+  triggering any synchronous IPC round-trips to mpv.
+- **Sub-50ms command dispatch:** Fast path commands (`pause`, `resume`, `stop`, `seek`, `set_volume`)
+  execute immediately via `MpvEventService` without waiting on track resolution locks.
+
+### Queue Architecture & Atomic Auto-Advance
+
+Cadence implements an in-memory "Up Next" queue without requiring complex database models:
+
+- **Data structure:** Queue items are tracked as `QueueItem { id: String, track: SearchResult }`,
+  managed under a `RwLock<Vec<QueueItem>>` and accompanied by `current_queue_index: RwLock<Option<usize>>`.
+- **Atomic progression:** When mpv signals `end-file` with reason `eof`, `handle_end_file()` checks
+  whether `desired_loop` is disabled. If so, it advances `current_queue_index` and immediately triggers
+  playback of the next track inside the backend.
+- **Eliminating race conditions:** Previous designs relied on the frontend listening to `TrackEnded` and
+  firing a subsequent `play()` call over IPC. This caused race conditions if the UI was lagging or minimized.
+  By handling queue advancement inside `PlayerOrchestrator`, transitions are atomic and immune to frontend state drift.
+- **Queue manipulations:** Supported operations include `next()`, `previous()`, `add_to_queue()`,
+  `add_to_queue_next()`, `remove_from_queue()`, `clear_queue()`, and `play_queue_index()`. All mutations
+  emit `OrchestratorEvent::QueueUpdated` to keep UI components in sync.
 
 ### Commands stay thin
 
 Every `#[tauri::command]` function is a one- or two-line delegation to a
-service — no branching, no business logic. `commands/search.rs` calls
-`services::yt_dlp::search` directly rather than through `PlayerService`,
-since `PlayerService` has nothing to add there (no cache, no history yet);
-a passthrough method would just be indirection with no behavior.
+service — no branching, no business logic.
 
 ### Killing child processes is not automatic
 
@@ -154,8 +174,8 @@ assuming Rust's `Drop`/`kill_on_drop` would clean them up:
 - **mpv**: `kill_on_drop(true)` only fires if `Drop` actually runs. Tauri's
   normal shutdown path uses `std::process::exit`, which skips destructors —
   confirmed by killing the running app and finding mpv still alive
-  afterward. Fixed with an explicit `MpvPlayer::kill()` wired to
-  `RunEvent::ExitRequested`.
+  afterward. Fixed with an explicit `shutdown()` routine and PID file tracking
+  wired to `RunEvent::ExitRequested` and Unix signal handlers.
 - **yt-dlp**: `run_yt_dlp`'s `Command` had no `kill_on_drop` at all. When
   `tokio::time::timeout` elapses, it drops the inner future — including the
   `Child` it owns — without killing anything. The process kept running
@@ -179,22 +199,25 @@ into the interface.
 
 ```
 src-tauri/src/
-├── commands/    Tauri-facing adapters. No logic — one call into a service.
-├── services/    All business logic. yt_dlp.rs and mpv.rs never import
-│                each other; player.rs is the only place that composes them.
+├── commands/    Tauri-facing adapters (playback.rs, search.rs). Thin delegation.
+├── services/    All business logic:
+│                ├── orchestrator.rs   — PlayerOrchestrator, queue management, auto-advance
+│                ├── mpv_event.rs      — MpvEventService, IPC event loop, property observers
+│                ├── yt_dlp.rs         — Direct URL extraction, search, TTL audio cache, circuit breaker
+│                └── mpv.rs            — Low-level Unix socket helper
 ├── models/      Plain structs/enums shared between backend and frontend
-│                (SearchResult, PlayerState, PlaybackStatus). pub, so they
-│                stay reachable and don't trip Rust's dead_code lint before
-│                something outside tests constructs them.
+│                (SearchResult, PlayerState, PlaybackStatus, QueueItem).
 └── errors.rs    CadenceError — every external-process interaction returns
                  Result<T, CadenceError>. #![deny(clippy::unwrap_used,
                  clippy::expect_used)] at the crate root makes this a
                  compiler error to violate, not just a convention.
 
 src/
-└── lib/tauri.ts Thin invoke() wrappers + the TS mirror of the Rust models.
-                 Field names match the Rust structs exactly (snake_case) —
-                 there's no serde rename crossing the IPC boundary.
+├── lib/
+│   ├── tauri.ts     Thin invoke() wrappers + TS mirrors of Rust models/events.
+│   ├── playback.ts  Pure helper functions for durations, clamping, and seeking.
+│   └── utils.ts     UI styling and class merging helpers.
+└── App.tsx          Liquid Glass UI (SearchBar, SearchResults, QueuePanel, NowPlaying).
 ```
 
 ## Adding a new capability

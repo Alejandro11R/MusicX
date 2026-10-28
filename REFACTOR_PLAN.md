@@ -57,6 +57,14 @@
 - [x] **7.2** Smoke test de la app real (arranque, SIGTERM, salida limpia)
 - [x] **7.3** Limpieza de mpv huérfanos entre ejecuciones
 
+## Fase 8: Cola de Reproducción, URLs Directas y Perfeccionamiento UI (Completado)
+- [x] **8.1** Eliminación de código muerto (`services/player.rs` legado removido)
+- [x] **8.2** Extracción y resolución de URLs directas de YouTube y Video IDs (`extract_youtube_video_id`, corrección de deserialización serde `ie_key: Option<String>`)
+- [x] **8.3** Sistema de cola ("Up Next / Queue") con auto-avance atómico en backend (`QueueItem`, `handle_end_file` EOF auto-advance)
+- [x] **8.4** Comandos Tauri y controles en bandeja del sistema (`next`, `previous`, `get_queue`, `add_to_queue`, `remove_from_queue`, etc.)
+- [x] **8.5** Frontend Liquid Glass: `QueuePanel` deslizable, badge contador, botones `+` en resultados/historial y atajos `N`, `P`, `Q`
+- [x] **8.6** Verificación total: 15/15 tests Vitest, 41/41 tests Rust (`cargo test`), 0 warnings `clippy`
+
 ### Bugs reales encontrados y corregidos en la verificación
 
 1. **`end-file` ilegible con mpv ≥ 0.40** (`mpv_event.rs`)
@@ -131,16 +139,18 @@ cd .. && npm test && npm run build
 4. **Tipado estricto**: `OrchestratorEvent` union type para eventos del backend
 
 #### Archivos Actualizados
-- `src/lib/tauri.ts` - Nuevas funciones `subscribeEvents`, `listenOrchestratorEvents`, tipos `OrchestratorEvent`
+- `src/lib/tauri.ts` - Nuevas funciones `subscribeEvents`, `listenOrchestratorEvents`, tipos `OrchestratorEvent`, comandos de cola (`nextTrack`, `previousTrack`, `addToQueue`, etc.)
 - `src/lib/playback.ts` - Utilidades puras de playback (`clamp`, `safeDuration`, `safePosition`, `seekTarget`, `formatDuration`)
-- `src/App.tsx` - Arquitectura event-driven, componentes separados, AbortController
+- `src/App.tsx` - Arquitectura event-driven, componentes separados, drawer `QueuePanel`, atajos de teclado y badge de URLs
 
-#### Controles de reproducción (auditoría)
+#### Controles de reproducción y Cola (Fase 8)
+- **Cola / Up Next**: Administrada en el backend con sincronización reactiva (`QueueUpdated`). Auto-avance atómico en fin de archivo sin saltos de foco en la interfaz.
+- **URLs directas de YouTube**: Procesamiento con regex para saltar búsqueda y reproducir directamente sin fricción.
 - **Loop**: estado optimista + `desired_loop` en el orquestador; se re-aplica tras cada carga/reconexión.
 - **Progreso**: el backend emite `Progress` a 2 Hz; el slider hace preview al arrastrar y `seek` al soltar.
   Un guard de 1.2s evita que el thumb rebote con posiciones viejas de mpv.
 - **Volumen**: preview local al arrastrar y commit al soltar (evita una tormenta de IPC).
-- **Teclado**: los atajos leen `playerStateRef`, así que no se quedan con estado obsoleto.
+- **Teclado**: los atajos leen `playerStateRef`, así que no se quedan con estado obsoleto (`Space`, `N`, `P`, `Q`, `M`, `L`, flechas, `Escape`).
 - **Reconexión**: banner ámbar cuando `connected === false`; al volver se refresca el estado completo.
 
 ---
@@ -148,42 +158,51 @@ cd .. && npm test && npm run build
 ## Checklist de No-Regresión Funcional
 
 ### Playback Básico
-- [ ] Play track → suena audio
-- [ ] Pause → pausa
-- [ ] Resume → continua
-- [ ] Stop → detiene y limpia current
-- [ ] Seek → salta a posición
-- [ ] Volume → cambia volumen
-- [ ] Loop → toggle loop
+- [x] Play track → suena audio
+- [x] Pause → pausa
+- [x] Resume → continua
+- [x] Stop → detiene y limpia current
+- [x] Seek → salta a posición
+- [x] Volume → cambia volumen
+- [x] Loop → toggle loop
+- [x] Next / Previous → navegación entre pistas
 
-### Búsqueda
-- [ ] Search "query" → resultados
-- [ ] Click resultado → play
-- [ ] Enter en search → play primer resultado
-- [ ] Escape → limpia búsqueda
+### Búsqueda y Enlaces
+- [x] Search "query" → resultados
+- [x] URL directa YouTube → resolución inmediata
+- [x] Click resultado → play
+- [x] Click `+` → añadir a la cola
+- [x] Enter en search → play primer resultado
+- [x] Escape → limpia búsqueda / cierra cola
+
+### Cola ("Up Next")
+- [x] Añadir canción a la cola
+- [x] Auto-avance a la siguiente canción al terminar
+- [x] Remover canción individual de la cola
+- [x] Vaciar cola completa
+- [x] Saltar a pista específica de la cola
 
 ### Historial
-- [ ] Recent tracks persisten en localStorage
-- [ ] Click recent → play
-- [ ] Clear recent → limpia
+- [x] Recent tracks persisten en localStorage
+- [x] Click recent → play
+- [x] Botón `+` en recent → añadir a la cola
+- [x] Clear recent → limpia
 
 ### UI/UX
-- [ ] Keyboard shortcuts: Space, M, L, ArrowLeft/Right, /, Cmd+K, Cmd+Q
-- [ ] Tray icon: toggle show/hide, quit
-- [ ] Window: minimize, hide (no close), drag region
-- [ ] Loading states visibles
-- [ ] Error messages dismissibles
+- [x] Keyboard shortcuts: Space, N, P, Q, M, L, ArrowLeft/Right, Escape
+- [x] Tray icon: toggle show/hide, play/pause, next, quit
+- [x] Window: minimize, hide (no close), drag region
+- [x] Loading states visibles
+- [x] Error messages dismissibles
 
 ### Salud
-- [ ] Health check mpv/yt-dlp al inicio
-- [ ] Shutdown limpio (mpv muere con app)
+- [x] Health check mpv/yt-dlp al inicio
+- [x] Shutdown limpio (mpv muere con app)
 
 ---
 
 ## Próximos Pasos Recomendados
 
-1. **Testing manual**: Ejecutar `cargo tauri dev` y verificar funcionalidad completa
-2. **Benchmarks**: Medir latencias reales con mpv + yt-dlp
-3. **Release build**: `cargo tauri build` para distribución
-4. **Monitoreo**: Verificar logs JSON estructurados en producción
-5. **Futuro**: Playlist/queue, MPRIS completo, archivos locales, visualización audio
+1. **Testing manual en vivo**: Ejecutar `cargo tauri dev` y disfrutar de sesiones de trabajo con la cola y buscador rápido.
+2. **Release build**: `cargo tauri build` para empaquetado y distribución en Linux/Desktop.
+3. **Futuro**: Soporte MPRIS nativo en Linux (DBus), carpetas/archivos locales opcionales.

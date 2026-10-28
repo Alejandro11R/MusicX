@@ -1,8 +1,16 @@
 # Cadence
 
-Cadence is a lightweight desktop music launcher for focus sessions. Search, press Enter, and keep working.
+Cadence is a lightweight, lightning-fast desktop music launcher for focus sessions. Search or paste a YouTube URL, press Enter, and keep working.
 
-No library, no playlists, no recommendations. Just search → listen → focus.
+No heavy library, no algorithm feeds, no distractions. Just search → listen → focus.
+
+## Features
+
+- **Instant Search & Direct YouTube URLs:** Query YouTube or paste video URLs / IDs (`youtu.be`, `watch?v=`, Shorts, Music) directly.
+- **Queue / Up Next System:** Queue songs with 1-click (`+`), reorder or remove tracks, and enjoy atomic auto-advance to the next song upon track completion.
+- **Event-Driven Concurrency:** High-performance Rust backend powered by `PlayerOrchestrator` and `mpv` IPC socket event loop with zero-latency state subscriptions.
+- **Liquid Glass UI:** Modern translucent aesthetic with ambient blur, responsive progress scrubbers, volume controls, and track history.
+- **Keyboard-First & System Tray:** Complete control without leaving your flow (`Space`, `N`, `P`, `Q`, `M`, `L`, arrows, `/`) plus tray integration.
 
 ## Philosophy
 
@@ -14,24 +22,40 @@ No library, no playlists, no recommendations. Just search → listen → focus.
 
 ## Stack
 
-- Tauri v2 + Rust
-- React + TypeScript + Vite
-- Playback via `mpv` (controlled over its IPC socket)
-- Search via `yt-dlp`
+- **Framework:** Tauri v2 + Rust
+- **Frontend:** React 19 + TypeScript + Vite + Tailwind CSS + Lucide Icons
+- **Playback Engine:** `mpv` (controlled via Unix IPC socket event loop)
+- **Audio Extraction:** `yt-dlp` (stream URL resolution with TTL caching)
 
 ## Development
 
+### Prerequisites
+
+- `mpv` and `yt-dlp` installed and available in `$PATH`.
+- Node.js (v18+) and Rust toolchain (`cargo`).
+
+### Commands
+
 ```bash
+# Install dependencies
 npm install
+
+# Start development launcher
 npm run tauri dev
+
+# Run frontend tests
+npm test
+
+# Run backend tests
+cd src-tauri && cargo test --lib -- --test-threads=1
+
+# Check lints and types
+npm run build
+cd src-tauri && cargo clippy --all-targets -- -D warnings
 ```
 
-## Architecture
+## Architecture & UI Documentation
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why things are built the
-way they are — mpv/yt-dlp choices, the search/resolve_audio split, and a
-couple of real bugs worth not repeating.
-
-See [docs/UI.md](docs/UI.md) for the visual identity — a compact launcher,
-not a Bitácora-style panel app, even though it reuses Bitácora's design
-tokens and spacing scale.
+- See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for architectural decisions, concurrency model (`PlayerOrchestrator`), IPC socket management, and incident postmortems.
+- See [docs/UI.md](docs/UI.md) for the visual identity, Liquid Glass specifications, typography, motion, and interaction guidelines.
+- See [REFACTOR_PLAN.md](REFACTOR_PLAN.md) for the roadmap history, auditing milestones, and completed refactoring phases.
