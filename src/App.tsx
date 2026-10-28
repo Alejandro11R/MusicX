@@ -8,23 +8,19 @@ import React, {
 } from "react";
 import {
   Clock,
-  Coffee,
   Headphones,
   Link2,
   ListMusic,
   Loader2,
-  Maximize2,
   Minus,
   Pause,
   Play,
   Plus,
   Repeat,
-  RotateCcw,
   Search,
   SkipBack,
   SkipForward,
   Square,
-  Timer,
   Volume2,
   VolumeX,
   X,
@@ -34,6 +30,11 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { GlassButton, MeshBackground, GlassPanel, SpecularRing } from "@/components/ui/liquid-glass";
+import {
+  FocusNowPlayingDock,
+  FocusStudio,
+  FocusWidget,
+} from "@/components/focus/FocusStudio";
 import { cn } from "@/lib/utils";
 import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
 import { extractDominantColor } from "@/lib/album-color";
@@ -404,319 +405,6 @@ const AUDIO_PRESETS: { id: AudioPreset; label: string; icon: string }[] = [
   { id: "slowed_reverb", label: "Slowed", icon: "🌙" },
   { id: "nightcore", label: "Nightcore", icon: "⚡" },
 ];
-
-interface FocusWidgetProps {
-  focusState: FocusState | null;
-  onStart: () => void;
-  onPause: () => void;
-  onReset: () => void;
-  onSkip: () => void;
-  onOpenZen: () => void;
-}
-
-const FocusWidget = React.memo(function FocusWidget({
-  focusState,
-  onStart,
-  onPause,
-  onReset,
-  onSkip,
-  onOpenZen,
-}: FocusWidgetProps) {
-  if (!focusState) return null;
-
-  const isRunning = focusState.is_running;
-  const mins = Math.floor(focusState.remaining_seconds / 60);
-  const secs = focusState.remaining_seconds % 60;
-  const timeFormatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-
-  const isBreak = focusState.phase === "short_break" || focusState.phase === "long_break";
-  const label =
-    focusState.phase === "focus"
-      ? "Focus"
-      : focusState.phase === "short_break"
-      ? "Descanso"
-      : focusState.phase === "long_break"
-      ? "Descanso +"
-      : "Focus";
-
-  return (
-    <div
-      className={cn(
-        "group flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] transition-all duration-300 border select-none",
-        isRunning
-          ? isBreak
-            ? "bg-amber-500/15 border-amber-400/40 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.25)]"
-            : "bg-teal-500/15 border-teal-400/40 text-teal-200 shadow-[0_0_12px_rgba(45,212,191,0.25)]"
-          : "bg-white/[0.04] border-white/10 text-white/60 hover:text-white/80 hover:bg-white/[0.08]"
-      )}
-    >
-      <button
-        type="button"
-        onClick={onOpenZen}
-        className="flex items-center gap-1.5 hover:opacity-90 transition-opacity cursor-pointer text-left"
-        title="Abrir Modo Zen / Focus expandido (Shift+F)"
-      >
-        <span className="flex items-center gap-1 font-medium">
-          {isBreak ? <Coffee className="size-3 text-amber-300" /> : <Timer className="size-3 text-teal-300" />}
-          <span>{label}</span>
-        </span>
-
-        <span className="font-mono text-xs font-semibold tabular-nums text-white/95">
-          {timeFormatted}
-        </span>
-        <Maximize2 className="size-2.5 opacity-0 group-hover:opacity-70 text-white/70 transition-opacity" />
-      </button>
-
-      <div className="flex items-center gap-1 pl-1 border-l border-white/10">
-        <button
-          type="button"
-          onClick={isRunning ? onPause : onStart}
-          className="hover:scale-110 active:scale-95 transition-transform"
-          aria-label={isRunning ? "Pausar sesión de enfoque (F)" : "Iniciar sesión de enfoque (F)"}
-          title={isRunning ? "Pausar sesión (F)" : "Iniciar sesión (F)"}
-        >
-          {isRunning ? <Pause className="size-3 fill-current" /> : <Play className="size-3 fill-current ml-0.5" />}
-        </button>
-
-        {isRunning && (
-          <button
-            type="button"
-            onClick={onSkip}
-            className="hover:scale-110 active:scale-95 transition-transform text-white/50 hover:text-white"
-            aria-label="Saltar a siguiente fase"
-            title="Saltar fase"
-          >
-            <SkipForward className="size-3 fill-current" />
-          </button>
-        )}
-
-        {focusState.phase !== "idle" && (
-          <button
-            type="button"
-            onClick={onReset}
-            className="hover:scale-110 active:scale-95 transition-transform text-white/40 hover:text-rose-300"
-            aria-label="Reiniciar temporizador"
-            title="Reiniciar temporizador"
-          >
-            <RotateCcw className="size-3" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-});
-
-interface ZenFocusOverlayProps {
-  focusState: FocusState | null;
-  isOpen: boolean;
-  onClose: () => void;
-  onStart: () => void;
-  onPause: () => void;
-  onReset: () => void;
-  onSkip: () => void;
-  onSelectDuration: (focusMins: number, breakMins: number) => void;
-  onToggleAutoPause: (enabled: boolean) => void;
-}
-
-const FOCUS_PRESETS = [
-  { label: "Clásico", focus: 25, breakMins: 5 },
-  { label: "Extendido", focus: 50, breakMins: 10 },
-  { label: "Deep Work", focus: 90, breakMins: 20 },
-];
-
-const ZenFocusOverlay = React.memo(function ZenFocusOverlay({
-  focusState,
-  isOpen,
-  onClose,
-  onStart,
-  onPause,
-  onReset,
-  onSkip,
-  onSelectDuration,
-  onToggleAutoPause,
-}: ZenFocusOverlayProps) {
-  if (!isOpen || !focusState) return null;
-
-  const isRunning = focusState.is_running;
-  const isBreak = focusState.phase === "short_break" || focusState.phase === "long_break";
-  const mins = Math.floor(focusState.remaining_seconds / 60);
-  const secs = focusState.remaining_seconds % 60;
-  const timeFormatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-
-  const progressPercent = focusState.total_seconds > 0
-    ? Math.max(0, Math.min(100, ((focusState.total_seconds - focusState.remaining_seconds) / focusState.total_seconds) * 100))
-    : 0;
-
-  return (
-    <div className="absolute inset-0 z-50 flex flex-col items-center justify-between p-6 bg-black/92 backdrop-blur-2xl rounded-[24px] animate-in fade-in zoom-in-95 duration-200 select-none">
-      {/* Barra superior del Modo Zen */}
-      <div className="flex w-full items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className={cn(
-            "flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border",
-            isBreak
-              ? "bg-amber-500/20 border-amber-400/40 text-amber-300"
-              : "bg-teal-500/20 border-teal-400/40 text-teal-300"
-          )}>
-            {isBreak ? <Coffee className="size-3.5" /> : <Timer className="size-3.5" />}
-            <span>
-              {focusState.phase === "focus"
-                ? "Fase de Enfoque"
-                : focusState.phase === "short_break"
-                ? "Descanso Corto"
-                : focusState.phase === "long_break"
-                ? "Descanso Largo"
-                : "Modo Zen / Focus"}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-white/70">
-            <span>Sesiones:</span>
-            <span className="font-semibold text-white">{focusState.sessions_completed}</span>
-          </div>
-        </div>
-
-        <GlassButton variant="ghost" size="sm" onClick={onClose} title="Cerrar Modo Zen (Esc)">
-          <X className="size-4" />
-        </GlassButton>
-      </div>
-
-      {/* Centro: Anillo visual y Temporizador Gigante */}
-      <div className="flex flex-col items-center justify-center gap-3 my-auto">
-        <div className="relative flex items-center justify-center size-52">
-          {/* Anillo de progreso SVG */}
-          <svg className="size-full -rotate-90" viewBox="0 0 100 100">
-            <circle
-              cx="50"
-              cy="50"
-              r="44"
-              className="stroke-white/10 fill-none"
-              strokeWidth="4"
-            />
-            <circle
-              cx="50"
-              cy="50"
-              r="44"
-              className={cn(
-                "fill-none transition-all duration-500 ease-out",
-                isBreak ? "stroke-amber-400" : "stroke-teal-400"
-              )}
-              strokeWidth="4"
-              strokeDasharray="276.46"
-              strokeDashoffset={276.46 - (276.46 * progressPercent) / 100}
-              strokeLinecap="round"
-            />
-          </svg>
-
-          {/* Tiempo en el centro */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="font-mono text-5xl font-bold tracking-tight text-white drop-shadow-md">
-              {timeFormatted}
-            </span>
-            <span className="text-xs text-white/50 mt-1 uppercase tracking-wider">
-              {isBreak ? "Relájate y respira" : "Máxima concentración"}
-            </span>
-          </div>
-        </div>
-
-        {/* Indicador de rondas de Pomodoro (● ● ○ ○) */}
-        <div className="flex items-center gap-2 mt-1">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <span
-              key={i}
-              className={cn(
-                "size-2.5 rounded-full transition-all duration-300",
-                i < (focusState.sessions_completed % 4)
-                  ? "bg-teal-400 shadow-[0_0_8px_rgba(45,212,191,0.6)]"
-                  : i === (focusState.sessions_completed % 4) && isRunning && !isBreak
-                  ? "bg-teal-400/50 animate-pulse"
-                  : "bg-white/20"
-              )}
-            />
-          ))}
-          <span className="text-[11px] text-white/40 ml-1.5 font-mono">
-            Ronda {(focusState.sessions_completed % 4) + 1}/4
-          </span>
-        </div>
-      </div>
-
-      {/* Controles principales y Presets rápidos */}
-      <div className="flex flex-col items-center gap-3.5 w-full max-w-sm">
-        {/* Presets de duración */}
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white/[0.04] border border-white/10 text-xs">
-          {FOCUS_PRESETS.map((p) => {
-            const isSelected = focusState.total_seconds === p.focus * 60;
-            return (
-              <button
-                key={p.label}
-                type="button"
-                disabled={isRunning}
-                onClick={() => onSelectDuration(p.focus, p.breakMins)}
-                className={cn(
-                  "px-3 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer",
-                  isSelected
-                    ? "bg-teal-400/20 text-teal-300 border border-teal-400/30 shadow-sm"
-                    : "text-white/60 hover:text-white hover:bg-white/5 disabled:opacity-40"
-                )}
-              >
-                {p.label} ({p.focus}m)
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Botones de acción */}
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={onReset}
-            className="p-2.5 rounded-full bg-white/5 border border-white/10 text-white/60 hover:text-rose-300 hover:bg-rose-500/10 transition-colors cursor-pointer"
-            title="Reiniciar temporizador"
-          >
-            <RotateCcw className="size-4" />
-          </button>
-
-          <GlassButton
-            type="button"
-            size="lg"
-            onClick={isRunning ? onPause : onStart}
-            className="px-8 py-3 rounded-full text-sm font-semibold shadow-lg"
-          >
-            {isRunning ? (
-              <span className="flex items-center gap-2">
-                <Pause className="size-4 fill-current" /> Pausar
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <Play className="size-4 fill-current ml-0.5" /> Iniciar Enfoque
-              </span>
-            )}
-          </GlassButton>
-
-          <button
-            type="button"
-            onClick={onSkip}
-            className="p-2.5 rounded-full bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-            title="Saltar a siguiente fase"
-          >
-            <SkipForward className="size-4" />
-          </button>
-        </div>
-
-        {/* Opción de auto-pausar música en descansos */}
-        <label className="flex items-center gap-2 text-xs text-white/50 cursor-pointer hover:text-white/80 transition-colors mt-0.5">
-          <input
-            type="checkbox"
-            checked={focusState.auto_pause_on_break}
-            onChange={(e) => onToggleAutoPause(e.target.checked)}
-            className="rounded border-white/20 bg-white/5 text-teal-400 focus:ring-teal-400/30"
-          />
-          <span>Auto-pausar música durante el descanso</span>
-        </label>
-      </div>
-    </div>
-  );
-});
 
 interface NowPlayingProps {
   playerState: PlayerState | null;
@@ -1292,7 +980,7 @@ function App() {
   }, [query]);
 
   const [isDragOver, setIsDragOver] = useState(false);
-  const [isZenOpen, setIsZenOpen] = useState(false);
+  const [isFocusView, setIsFocusView] = useState(false);
 
   const handleSelectFocusDuration = useCallback(async (focusMins: number, breakMins: number) => {
     try {
@@ -1343,19 +1031,28 @@ function App() {
   useEffect(() => {
     function handleGlobalKeyDown(e: KeyboardEvent) {
       const isSearchFocused = document.activeElement === searchInputRef.current;
-      if (e.key === "Escape" && isZenOpen) {
+
+      // Al buscar desde Focus, volvemos a la biblioteca sin tocar el temporizador.
+      const focusSearch = (select = false) => {
+        if (isFocusView) setIsFocusView(false);
+        window.setTimeout(() => {
+          searchInputRef.current?.focus();
+          if (select) searchInputRef.current?.select();
+        }, 0);
+      };
+
+      if (e.key === "Escape" && isFocusView) {
         e.preventDefault();
-        setIsZenOpen(false);
+        setIsFocusView(false);
       } else if (!isSearchFocused && e.shiftKey && (e.key === "F" || e.key === "f")) {
         e.preventDefault();
-        setIsZenOpen((prev) => !prev);
+        setIsFocusView((prev) => !prev);
       } else if (e.key === "/" && !isSearchFocused) {
         e.preventDefault();
-        searchInputRef.current?.focus();
+        focusSearch();
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
+        focusSearch(true);
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "q") {
         e.preventDefault();
         quit();
@@ -1396,7 +1093,7 @@ function App() {
     return () => document.removeEventListener("keydown", handleGlobalKeyDown);
   }, [
     focusState?.is_running,
-    isZenOpen,
+    isFocusView,
     handleNext,
     handlePauseFocus,
     handlePrevious,
@@ -1716,19 +1413,6 @@ function App() {
             </div>
           </div>
         )}
-        {isZenOpen && (
-          <ZenFocusOverlay
-            focusState={focusState}
-            isOpen={isZenOpen}
-            onClose={() => setIsZenOpen(false)}
-            onStart={handleStartFocus}
-            onPause={handlePauseFocus}
-            onReset={handleResetFocus}
-            onSkip={handleSkipFocus}
-            onSelectDuration={handleSelectFocusDuration}
-            onToggleAutoPause={handleToggleAutoPause}
-          />
-        )}
         {/* Barra superior con arrastre nativo y controles Apple Glass */}
         <header
           data-tauri-drag-region
@@ -1757,11 +1441,10 @@ function App() {
 
           <FocusWidget
             focusState={focusState}
+            isActive={isFocusView}
+            onOpen={() => setIsFocusView(true)}
             onStart={handleStartFocus}
             onPause={handlePauseFocus}
-            onReset={handleResetFocus}
-            onSkip={handleSkipFocus}
-            onOpenZen={() => setIsZenOpen(true)}
           />
 
           <div className="flex items-center gap-1.5">
@@ -1774,7 +1457,8 @@ function App() {
           </div>
         </header>
 
-        {/* Buscador de vidrio líquido */}
+        {/* Buscador de vidrio líquido — se oculta en Focus para dejar sitio al estudio */}
+        {!isFocusView && (
         <div className="relative flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
@@ -1833,6 +1517,7 @@ function App() {
             )}
           </GlassButton>
         </div>
+        )}
 
         {error && (
           <div className="flex items-center justify-between rounded-lg bg-rose-500/15 border border-rose-500/30 px-3 py-1.5 text-xs text-rose-300" role="alert">
@@ -1861,8 +1546,29 @@ function App() {
           </div>
         )}
 
-        {/* Vista Central: Cola de Reproducción O Resultados / Recientes */}
-        {isQueueOpen ? (
+        {/* Vista Central: Focus Studio, Cola de Reproducción O Resultados / Recientes */}
+        {isFocusView ? (
+          focusState ? (
+            <FocusStudio
+              focusState={focusState}
+              currentTrack={playerState?.current ?? null}
+              isPlaying={isPlaying}
+              onStart={handleStartFocus}
+              onPause={handlePauseFocus}
+              onReset={handleResetFocus}
+              onSkip={handleSkipFocus}
+              onSelectDuration={handleSelectFocusDuration}
+              onToggleAutoPause={handleToggleAutoPause}
+              onOpenLibrary={() => setIsFocusView(false)}
+              onClose={() => setIsFocusView(false)}
+            />
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-[22px] border border-white/10 bg-white/[0.02] text-center">
+              <Loader2 className="size-5 animate-spin text-teal-300" />
+              <p className="text-xs text-white/55">Preparando Focus Studio…</p>
+            </div>
+          )
+        ) : isQueueOpen ? (
           <QueuePanel
             queue={queue}
             currentTrackId={playerState?.current?.id}
@@ -2009,31 +1715,42 @@ function App() {
           </>
         )}
 
-        {/* Tarjeta Flotante Now Playing (Glassmorphism Líquido) */}
-        {(isTrackLoading || playerState?.current) && (
-          <NowPlaying
+        {/* Música: dock compacto en Focus, reproductor completo en Biblioteca */}
+        {isFocusView ? (
+          <FocusNowPlayingDock
             playerState={playerState}
             isTrackLoading={isTrackLoading}
             isPlaying={isPlaying}
-            isLooping={isLooping}
-            dragPosition={dragPosition}
             onTogglePlayback={handleTogglePlayback}
-            onToggleLoop={handleToggleLoop}
-            onStop={handleStop}
             onNext={handleNext}
-            onPrevious={handlePrevious}
-            onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
-            isQueueOpen={isQueueOpen}
-            queueCount={queue.length}
-            onSeekPreview={setDragPosition}
-            onSeekCommit={handleSeekCommit}
-            onVolumePreview={handleVolumePreview}
-            onVolumeCommit={handleVolumeCommit}
-            onToggleMute={handleToggleMute}
-            volume={volume}
-            onSelectPreset={handleSelectPreset}
-            onCycleSpeed={handleCycleSpeed}
+            onOpenLibrary={() => setIsFocusView(false)}
           />
+        ) : (
+          (isTrackLoading || playerState?.current) && (
+            <NowPlaying
+              playerState={playerState}
+              isTrackLoading={isTrackLoading}
+              isPlaying={isPlaying}
+              isLooping={isLooping}
+              dragPosition={dragPosition}
+              onTogglePlayback={handleTogglePlayback}
+              onToggleLoop={handleToggleLoop}
+              onStop={handleStop}
+              onNext={handleNext}
+              onPrevious={handlePrevious}
+              onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
+              isQueueOpen={isQueueOpen}
+              queueCount={queue.length}
+              onSeekPreview={setDragPosition}
+              onSeekCommit={handleSeekCommit}
+              onVolumePreview={handleVolumePreview}
+              onVolumeCommit={handleVolumeCommit}
+              onToggleMute={handleToggleMute}
+              volume={volume}
+              onSelectPreset={handleSelectPreset}
+              onCycleSpeed={handleCycleSpeed}
+            />
+          )
         )}
       </GlassPanel>
     </main>

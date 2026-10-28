@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 @import "@/styles/liquid-glass.css";
+@import "@/styles/focus.css";
 
 @custom-variant dark (&:is(.dark *));
 
