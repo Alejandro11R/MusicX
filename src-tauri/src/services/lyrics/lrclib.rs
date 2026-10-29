@@ -10,7 +10,7 @@ use crate::models::lyrics::{
 };
 
 use super::parser::{parse_lrc, MAX_LINES};
-use super::text::{clean_artist, clean_title, normalize};
+use super::text::{clean_artist, clean_title};
 
 const BASE_URL: &str = "https://lrclib.net/";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -105,42 +105,7 @@ impl LrclibClient {
         &self,
         request: &LyricsRequest,
     ) -> Result<Option<LyricsDoc>, CadenceError> {
-        let mut candidates = self.search_tracks(request).await?;
-
-        // Fallback 1: si no hubo candidatos y teníamos artista forzado, reintentar con `q` libre
-        if candidates.is_empty() && request.artist.is_some() {
-            let fallback_req = LyricsRequest {
-                track_id: request.track_id.clone(),
-                title: clean_title(&request.title, None),
-                artist: None,
-                album: None,
-                duration_seconds: request.duration_seconds,
-                local_path: request.local_path.clone(),
-                force: request.force,
-            };
-            if let Ok(fallback_candidates) = self.search_tracks(&fallback_req).await {
-                candidates = fallback_candidates;
-            }
-        }
-
-        // Fallback 2: si el título contiene " - ", buscar usando la porción de canción
-        if candidates.is_empty() {
-            if let Some((_, song)) = request.title.split_once(" - ") {
-                let song_cleaned = clean_title(song, None);
-                let fallback_req = LyricsRequest {
-                    track_id: request.track_id.clone(),
-                    title: song_cleaned,
-                    artist: None,
-                    album: None,
-                    duration_seconds: request.duration_seconds,
-                    local_path: request.local_path.clone(),
-                    force: request.force,
-                };
-                if let Ok(fallback_candidates) = self.search_tracks(&fallback_req).await {
-                    candidates = fallback_candidates;
-                }
-            }
-        }
+        let candidates = self.search_tracks(request).await?;
 
         let best = candidates
             .into_iter()
@@ -148,7 +113,7 @@ impl LrclibClient {
                 let score = score(&candidate, request);
                 (score, candidate)
             })
-            .filter(|(score, _)| *score >= 50)
+            .filter(|(score, _)| *score >= 40)
             .max_by_key(|(score, _)| *score)
             .map(|(_, candidate)| candidate);
 
@@ -180,30 +145,72 @@ impl LrclibClient {
         &self,
         request: &LyricsRequest,
     ) -> Result<Vec<LrclibTrack>, CadenceError> {
-        let mut url = self.endpoint("api/search")?;
-        {
-            let mut query = url.query_pairs_mut();
-            let title = clean_title(&request.title, request.artist.as_deref());
-            match request.artist.as_deref().filter(|a| !a.trim().is_empty()) {
-                Some(artist) => {
-                    query.append_pair("track_name", &title);
-                    query.append_pair("artist_name", &clean_artist(artist));
-                }
-                None => {
-                    query.append_pair("q", &title);
+        let is_placeholder_artist = request
+            .artist
+            .as_deref()
+            .map(|a| {
+                a.trim().is_empty()
+                    || a.eq_ignore_ascii_case("cadence")
+                    || a.to_lowercase().starts_with("cadence")
+                    || a == "Archivo Local"
+            })
+            .unwrap_or(true);
+
+        // Si tenemos un artista real, probar búsqueda exacta por track_name + artist_name primero
+        if !is_placeholder_artist {
+            let mut url = self.endpoint("api/search")?;
+            {
+                let mut query = url.query_pairs_mut();
+                let title = clean_title(&request.title, request.artist.as_deref());
+                let artist = request.artist.as_deref().unwrap();
+                query.append_pair("track_name", &title);
+                query.append_pair("artist_name", &clean_artist(artist));
+            }
+
+            if let Ok(response) = self.request(url).await {
+                if response.status().is_success() {
+                    if let Ok(tracks) = response.json::<Vec<LrclibTrack>>().await {
+                        if !tracks.is_empty() {
+                            return Ok(tracks);
+                        }
+                    }
                 }
             }
         }
 
-        let response = self.request(url).await?;
-        let tracks: Vec<LrclibTrack> = response
-            .json()
-            .await
-            .map_err(|error| CadenceError::Lyrics {
-                message: format!("lrclib search parse: {error}"),
-            })?;
+        // Búsqueda libre `q`: extremadamente efectiva para títulos de YouTube
+        let query_text = clean_title(&request.title, None);
+        let mut url = self.endpoint("api/search")?;
+        url.query_pairs_mut().append_pair("q", &query_text);
+        if let Ok(response) = self.request(url).await {
+            if response.status().is_success() {
+                if let Ok(tracks) = response.json::<Vec<LrclibTrack>>().await {
+                    if !tracks.is_empty() {
+                        return Ok(tracks);
+                    }
+                }
+            }
+        }
 
-        Ok(tracks)
+        // Si el título contiene " - ", probar con las partes individuales
+        if let Some((part1, part2)) = request.title.split_once(" - ") {
+            for part in [part1, part2] {
+                let clean_part = clean_title(part, None);
+                let mut url = self.endpoint("api/search")?;
+                url.query_pairs_mut().append_pair("q", &clean_part);
+                if let Ok(response) = self.request(url).await {
+                    if response.status().is_success() {
+                        if let Ok(tracks) = response.json::<Vec<LrclibTrack>>().await {
+                            if !tracks.is_empty() {
+                                return Ok(tracks);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Vec::new())
     }
 
     pub async fn get_by_id(&self, id: i64) -> Result<Option<LyricsDoc>, CadenceError> {
@@ -351,43 +358,44 @@ fn parse_plain(raw: &str) -> Vec<crate::models::lyrics::LyricLine> {
 }
 
 fn score(candidate: &LrclibTrack, request: &LyricsRequest) -> i32 {
-    let wanted_title = normalize(&clean_title(&request.title, request.artist.as_deref()));
-    let candidate_title = normalize(&candidate.track_name);
+    let raw_title = request.title.to_lowercase();
+    let candidate_title = candidate.track_name.to_lowercase();
+    let candidate_artist = candidate.artist_name.to_lowercase();
 
     let mut score = 0;
-    if !wanted_title.is_empty() && candidate_title == wanted_title {
+    if candidate_title == raw_title {
         score += 100;
-    } else if !wanted_title.is_empty()
-        && (candidate_title.contains(&wanted_title) || wanted_title.contains(&candidate_title))
-    {
-        score += 45;
+    } else if raw_title.contains(&candidate_title) || candidate_title.contains(&raw_title) {
+        score += 60;
+    } else {
+        let title_words: Vec<&str> = raw_title.split_whitespace().collect();
+        let matched = title_words.iter().filter(|w| candidate_title.contains(**w)).count();
+        if !title_words.is_empty() {
+            score += ((matched as f32 / title_words.len() as f32) * 45.0) as i32;
+        }
     }
 
-    if let Some(artist) = request.artist.as_deref() {
-        let wanted_artist = normalize(&clean_artist(artist));
-        let candidate_artist = normalize(&candidate.artist_name);
-        if candidate_artist == wanted_artist {
-            score += 60;
-        } else if candidate_artist.contains(&wanted_artist)
-            || wanted_artist.contains(&candidate_artist)
-        {
-            score += 25;
+    if let Some(artist) = request.artist.as_deref().filter(|a| !a.eq_ignore_ascii_case("cadence")) {
+        let wanted_artist = artist.to_lowercase();
+        if candidate_artist == wanted_artist || raw_title.contains(&candidate_artist) {
+            score += 40;
+        } else if candidate_artist.contains(&wanted_artist) || wanted_artist.contains(&candidate_artist) {
+            score += 20;
         }
+    } else if raw_title.contains(&candidate_artist) {
+        score += 40;
+    }
+
+    if candidate.synced_lyrics.is_some() {
+        score += 25;
     }
 
     if request.duration_seconds >= 1.0 && candidate.duration >= 1.0 {
         let difference = (candidate.duration - request.duration_seconds).abs();
-        score -= (difference.min(30.0) as i32) * 5;
-        if difference <= 2.0 {
-            score += 30;
+        score -= (difference.min(30.0) as i32) * 3;
+        if difference <= 3.0 {
+            score += 25;
         }
-    }
-
-    if candidate.synced_lyrics.is_some() {
-        score += 15;
-    }
-    if candidate.instrumental {
-        score -= 5;
     }
 
     score

@@ -1152,6 +1152,7 @@ function App() {
   const searchAbortRef = useRef<AbortController | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
   const seekGuardRef = useRef<{ target: number; at: number } | null>(null);
+  const lyricsAttemptedTrackIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -1309,6 +1310,7 @@ function App() {
         getState().then(setPlayerState).catch(console.error);
         break;
       case "TrackStarted":
+        lyricsAttemptedTrackIdRef.current = null;
         setLyricsDoc(null);
         setIsLyricsLoading(true);
         getState().then(setPlayerState).catch(console.error);
@@ -1388,13 +1390,15 @@ function App() {
 
   // Auto-cargar letra si el modo inmersivo o el panel de letras se abren sin letra cargada
   useEffect(() => {
+    const current = playerState?.current;
+    if (!current?.id) return;
+
     if (
       (isImmersiveOpen || isLyricsOpen) &&
-      playerState?.current &&
       !lyricsDoc &&
-      !isLyricsLoading
+      lyricsAttemptedTrackIdRef.current !== current.id
     ) {
-      const current = playerState.current;
+      lyricsAttemptedTrackIdRef.current = current.id;
       setIsLyricsLoading(true);
       getLyrics({
         track_id: current.id,
@@ -1407,12 +1411,22 @@ function App() {
         })
         .catch((err) => {
           console.error("Error al auto-cargar letra:", err);
+          setLyricsDoc({
+            track_id: current.id,
+            source: "none",
+            synced: false,
+            instrumental: false,
+            offset_ms: 0,
+            lines: [],
+            title: undefined,
+            artist: undefined,
+          });
         })
         .finally(() => {
           setIsLyricsLoading(false);
         });
     }
-  }, [isImmersiveOpen, isLyricsOpen, playerState?.current?.id, lyricsDoc, isLyricsLoading]);
+  }, [isImmersiveOpen, isLyricsOpen, playerState?.current?.id, lyricsDoc]);
 
   const handlePlayQueueIndex = useCallback(async (index: number) => {
     try {

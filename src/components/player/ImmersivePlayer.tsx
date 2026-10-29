@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState } from "react";
 import {
   X,
   Play,
@@ -117,28 +117,6 @@ export function ImmersivePlayer({
     lineRefs,
     enabled: isSynced,
   });
-
-  // Intentar cargar letra automáticamente si no está disponible al abrir
-  useEffect(() => {
-    if (!lyricsDoc && currentTrack && !externalLoading && !internalLoading) {
-      setInternalLoading(true);
-      getLyrics({
-        track_id: currentTrack.id,
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        duration_seconds: currentTrack.duration_seconds,
-      })
-        .then((doc) => {
-          onLyricsUpdated?.(doc);
-        })
-        .catch((err) => {
-          console.error("Error cargando letras en modo inmersivo:", err);
-        })
-        .finally(() => {
-          setInternalLoading(false);
-        });
-    }
-  }, [currentTrack?.id]);
 
   const handleRefreshLyrics = async () => {
     if (!currentTrack) return;

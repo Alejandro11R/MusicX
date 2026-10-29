@@ -19,7 +19,7 @@ use crate::models::lyrics::{
 use cache::LyricsCache;
 use lrclib::LrclibClient;
 use parser::parse_lrc;
-use text::{clean_artist, clean_title, split_artist_title};
+use text::{clean_artist, clean_title};
 
 type LyricsOutcome = Result<Arc<LyricsDoc>, String>;
 
@@ -178,9 +178,9 @@ impl LyricsService {
         }
 
         // 4. LRCLIB: exacto → difuso → vacío (negative cache).
-        let doc = match self.lrclib.get_exact(request).await? {
+        let doc = match self.lrclib.get_exact(request).await.ok().flatten() {
             Some(doc) => doc,
-            None => match self.lrclib.search_best(request).await? {
+            None => match self.lrclib.search_best(request).await.ok().flatten() {
                 Some(doc) => doc,
                 None => LyricsDoc::empty(&request.track_id),
             },
@@ -203,13 +203,9 @@ impl LyricsRequest {
                     && !artist.eq_ignore_ascii_case("cadence")
                     && !artist.to_lowercase().starts_with("cadence") =>
             {
-                if let Some((a, t)) = track.title.split_once(" - ") {
-                    (clean_title(t, Some(a)), Some(a.trim().to_string()))
-                } else {
-                    (clean_title(&track.title, Some(artist)), Some(artist.to_string()))
-                }
+                (clean_title(&track.title, Some(artist)), Some(artist.to_string()))
             }
-            _ => split_artist_title(&track.title),
+            _ => (track.title.clone(), None),
         };
 
         Self {
