@@ -474,7 +474,7 @@ const QueuePanel = React.memo(function QueuePanel({
         </div>
       ) : (
         <ScrollArea className="min-h-0 flex-1 pr-1">
-          <ol className="flex flex-col gap-1.5">
+          <ol className="flex flex-col gap-1.5 pb-32">
             {queue.map((item, index) => {
               const isCurrent = currentTrackId === item.track.id;
               return (
@@ -630,7 +630,11 @@ const NowPlaying = React.memo(function NowPlaying({
   }, [current?.thumbnail_url]);
 
   return (
-    <div className="liquid-card mt-auto flex flex-col gap-3 rounded-2xl p-3 border border-white/10 shadow-xl" role="region" aria-label="Reproductor">
+    <div
+      className="relative flex flex-col gap-2 rounded-2xl p-2.5 sm:p-3 border border-white/15 bg-black/70 backdrop-blur-2xl shadow-[0_16px_40px_rgba(0,0,0,0.65)]"
+      role="region"
+      aria-label="Reproductor flotante"
+    >
       {isTrackLoading && !current && (
         <div className="flex items-center gap-2 py-1 text-xs text-teal-300" role="status">
           <Loader2 className="size-3.5 animate-spin" />
@@ -639,246 +643,255 @@ const NowPlaying = React.memo(function NowPlaying({
       )}
 
       {current && (
-        <div className="flex items-center gap-3">
-          <SpecularRing
-            className="size-12 shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform"
-            onClick={onOpenImmersive}
-            title="Abrir Modo Inmersivo Apple Music (I)"
-          >
-            <div
-              className={cn(
-                "overflow-hidden rounded-xl bg-white/10 transition-all duration-300",
-                isPlaying && "shadow-[0_4px_20px_-2px_rgba(45,212,191,0.35)]",
-              )}
-              style={{
-                borderColor: albumColor ?? undefined,
-                borderWidth: albumColor ? "1px" : undefined,
-                borderStyle: albumColor ? "solid" : undefined,
-              }}
-            >
-              {current.thumbnail_url ? (
-                <img
-                  src={current.thumbnail_url}
-                  alt=""
-                  className="size-full object-cover"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLElement).style.display = "none";
+        <>
+          {/* Fila 1: Info Canción (Izquierda) + Controles Principales (Centro) + Utilidades & Volumen (Derecha) */}
+          <div className="flex items-center justify-between gap-3">
+            {/* Info de la pista */}
+            <div className="flex items-center gap-2.5 min-w-0 max-w-[42%] sm:max-w-[34%]">
+              <SpecularRing
+                className="size-9 sm:size-10 shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform"
+                onClick={onOpenImmersive}
+                title="Abrir Modo Inmersivo Apple Music (I)"
+              >
+                <div
+                  className={cn(
+                    "overflow-hidden rounded-xl bg-white/10 transition-all duration-300 size-full",
+                    isPlaying && "shadow-[0_4px_16px_-2px_rgba(45,212,191,0.35)]",
+                  )}
+                  style={{
+                    borderColor: albumColor ?? undefined,
+                    borderWidth: albumColor ? "1px" : undefined,
+                    borderStyle: albumColor ? "solid" : undefined,
                   }}
-                />
-              ) : (
-                <div className="size-full flex items-center justify-center bg-teal-500/10">
-                  <Headphones className="size-6 text-teal-300" />
+                >
+                  {current.thumbnail_url ? (
+                    <img
+                      src={current.thumbnail_url}
+                      alt=""
+                      className="size-full object-cover"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = "none";
+                      }}
+                    />
+                  ) : (
+                    <div className="size-full flex items-center justify-center bg-teal-500/10">
+                      <Headphones className="size-4 text-teal-300" />
+                    </div>
+                  )}
                 </div>
+              </SpecularRing>
+              <div className="flex min-w-0 flex-1 flex-col justify-center">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="size-1.5 shrink-0 rounded-full transition-all"
+                    style={{
+                      backgroundColor: isPlaying
+                        ? (albumColor ?? "#2dd4bf")
+                        : undefined,
+                      boxShadow: isPlaying
+                        ? `0 0 6px ${albumColor ?? "#2dd4bf"}`
+                        : undefined,
+                      animation: isPlaying ? "pulse 2s infinite" : undefined,
+                    }}
+                  />
+                  <p className="truncate text-xs font-semibold text-white/95">
+                    {current.title}
+                  </p>
+                </div>
+                {current.artist && (
+                  <p className="truncate pl-3 text-[10px] text-white/60">
+                    {current.artist}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Controles Principales de Transporte */}
+            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+              <GlassButton
+                variant="ghost"
+                size="sm"
+                aria-label={isLooping ? "Desactivar bucle (L)" : "Activar bucle (L)"}
+                title={isLooping ? "Bucle activo (L)" : "Bucle inactivo (L)"}
+                onClick={onToggleLoop}
+                className={cn(
+                  "hidden xs:flex",
+                  isLooping
+                    ? "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]"
+                    : "border-white/5 hover:bg-white/[0.1] hover:text-white",
+                )}
+              >
+                <Repeat className={cn("size-3", isLooping && "stroke-[2.5]")} />
+              </GlassButton>
+
+              <GlassButton
+                variant="ghost"
+                size="sm"
+                aria-label="Pista anterior (P)"
+                title="Pista anterior (P)"
+                onClick={onPrevious}
+                className="border-white/5 hover:bg-white/[0.1] hover:text-white"
+              >
+                <SkipBack className="size-3.5 fill-current" />
+              </GlassButton>
+
+              <GlassButton
+                variant="primary"
+                size="md"
+                aria-label={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+                title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+                onClick={onTogglePlayback}
+                className="shadow-[0_0_16px_rgba(45,212,191,0.35)]"
+              >
+                {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 ml-0.5 fill-current" />}
+              </GlassButton>
+
+              <GlassButton
+                variant="ghost"
+                size="sm"
+                aria-label="Siguiente pista (N)"
+                title="Siguiente pista (N)"
+                onClick={onNext}
+                className="border-white/5 hover:bg-white/[0.1] hover:text-white"
+              >
+                <SkipForward className="size-3.5 fill-current" />
+              </GlassButton>
+
+              <GlassButton
+                variant="ghost"
+                size="sm"
+                aria-label="Detener"
+                title="Detener"
+                onClick={onStop}
+                className="hidden sm:flex border-white/5 hover:bg-white/[0.1] hover:text-white"
+              >
+                <Square className="size-3 fill-current" />
+              </GlassButton>
+            </div>
+
+            {/* Utilidades y Control de Volumen */}
+            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 justify-end">
+              <GlassButton
+                variant="ghost"
+                size="sm"
+                aria-label="Cola de reproducción (Q)"
+                title={`Cola de reproducción (${queueCount}) (Q)`}
+                onClick={onToggleQueue}
+                className={cn(
+                  "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
+                  isQueueOpen && "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]",
+                )}
+              >
+                <ListMusic className="size-3" />
+                {queueCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex size-3 items-center justify-center rounded-full bg-teal-400 text-[8px] font-bold text-black shadow-xs">
+                    {queueCount > 9 ? "9+" : queueCount}
+                  </span>
+                )}
+              </GlassButton>
+
+              {onToggleLyrics && (
+                <GlassButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Letras sincronizadas (Y)"
+                  title="Letras en tiempo real (Y)"
+                  onClick={onToggleLyrics}
+                  className={cn(
+                    "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
+                    isLyricsOpen && "bg-indigo-500/25 text-indigo-300 border-indigo-400/40 shadow-[0_0_12px_rgba(99,102,241,0.35)]",
+                  )}
+                >
+                  <Mic2 className="size-3" />
+                </GlassButton>
               )}
+
+              <GlassButton
+                variant="ghost"
+                size="sm"
+                aria-label={showAudioFx ? "Ocultar efectos de audio" : "Mostrar efectos de audio"}
+                title="Efectos de audio y velocidad (EQ)"
+                onClick={() => setShowAudioFx((prev) => !prev)}
+                className={cn(
+                  "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
+                  (showAudioFx || (playerState?.audio_preset ?? "normal") !== "normal" || (playerState?.speed ?? 1.0) !== 1.0) &&
+                    "bg-purple-500/20 text-purple-300 border-purple-400/40 shadow-[0_0_10px_rgba(168,85,247,0.3)]",
+                )}
+              >
+                <Sliders className="size-3" />
+              </GlassButton>
+
+              {onOpenImmersive && (
+                <GlassButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Modo Inmersivo (I)"
+                  title="Modo Inmersivo Apple Music (I)"
+                  onClick={onOpenImmersive}
+                  className="border-white/5 hover:bg-white/[0.1] hover:text-white text-amber-300"
+                >
+                  <Sparkles className="size-3" />
+                </GlassButton>
+              )}
+
+              {/* Volumen compacto */}
+              <div className="hidden sm:flex items-center gap-1 pl-1 border-l border-white/10">
+                <button
+                  type="button"
+                  onClick={onToggleMute}
+                  className="text-white/60 hover:text-white transition-colors p-0.5 cursor-pointer"
+                  aria-label={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
+                  title={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
+                >
+                  {volume === 0 ? (
+                    <VolumeX className="size-3.5 shrink-0 text-rose-300" />
+                  ) : (
+                    <Volume2 className="size-3.5 shrink-0 text-white/60" />
+                  )}
+                </button>
+                <div className="w-16 md:w-20">
+                  <Slider
+                    className="cursor-pointer"
+                    value={[volume]}
+                    max={100}
+                    step={1}
+                    variant="glass"
+                    onValueChange={([level]) => onVolumePreview(level)}
+                    onValueCommit={([level]) => onVolumeCommit(level)}
+                    aria-label="Volumen"
+                    aria-valuetext={`${volume}%`}
+                  />
+                </div>
+              </div>
             </div>
-          </SpecularRing>
-          <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
-            <div className="flex items-center gap-1.5">
-              <span
-                className="size-1.5 shrink-0 rounded-full transition-all"
-                style={{
-                  backgroundColor: isPlaying
-                    ? (albumColor ?? "#2dd4bf")
-                    : undefined,
-                  boxShadow: isPlaying
-                    ? `0 0 6px ${albumColor ?? "#2dd4bf"}`
-                    : undefined,
-                  animation: isPlaying ? "pulse 2s infinite" : undefined,
-                }}
-              />
-              <p className="truncate text-xs font-semibold text-white/95">
-                {current.title}
-              </p>
-            </div>
-            {current.artist && (
-              <p className="truncate pl-3 text-[11px] text-white/60">
-                {current.artist}
-              </p>
-            )}
           </div>
-        </div>
-      )}
 
-      {current && (
-        <div className="flex items-center gap-2 px-0.5">
-          <span className="w-8 shrink-0 text-right text-[10px] tabular-nums text-white/60">
-            {formatDuration(position)}
-          </span>
-          <Slider
-            className="flex-1"
-            value={[position]}
-            max={Math.max(duration, 1)}
-            step={1}
-            variant="glass"
-            onValueChange={([value]) => onSeekPreview(value)}
-            onValueCommit={([value]) => onSeekCommit(value)}
-            aria-label="Posición de reproducción"
-            aria-valuetext={`${formatDuration(position)} de ${formatDuration(duration)}`}
-          />
-          <span className="w-8 shrink-0 text-[10px] tabular-nums text-white/60">
-            {formatDuration(duration)}
-          </span>
-        </div>
-      )}
-
-      {/* Controles Principales */}
-      <div className="flex items-center justify-center gap-2 pt-0.5">
-        <GlassButton
-          variant="ghost"
-          size="md"
-          aria-label={isLooping ? "Desactivar bucle (L)" : "Activar bucle (L)"}
-          title={isLooping ? "Bucle activo (L)" : "Bucle inactivo (L)"}
-          onClick={onToggleLoop}
-          className={cn(
-            isLooping
-              ? "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]"
-              : "border-white/5 hover:bg-white/[0.1] hover:text-white",
-          )}
-        >
-          <Repeat className={cn("size-3.5", isLooping && "stroke-[2.5]")} />
-        </GlassButton>
-
-        <GlassButton
-          variant="ghost"
-          size="md"
-          aria-label="Pista anterior (P)"
-          title="Pista anterior (P)"
-          onClick={onPrevious}
-          className="border-white/5 hover:bg-white/[0.1] hover:text-white"
-        >
-          <SkipBack className="size-3.5 fill-current" />
-        </GlassButton>
-
-        <GlassButton
-          variant="primary"
-          size="lg"
-          aria-label={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
-          title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
-          onClick={onTogglePlayback}
-        >
-          {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 ml-0.5 fill-current" />}
-        </GlassButton>
-
-        <GlassButton
-          variant="ghost"
-          size="md"
-          aria-label="Siguiente pista (N)"
-          title="Siguiente pista (N)"
-          onClick={onNext}
-          className="border-white/5 hover:bg-white/[0.1] hover:text-white"
-        >
-          <SkipForward className="size-3.5 fill-current" />
-        </GlassButton>
-
-        <GlassButton
-          variant="ghost"
-          size="md"
-          aria-label="Detener"
-          title="Detener"
-          onClick={onStop}
-          className="border-white/5 hover:bg-white/[0.1] hover:text-white"
-        >
-          <Square className="size-3.5 fill-current" />
-        </GlassButton>
-
-        <GlassButton
-          variant="ghost"
-          size="md"
-          aria-label="Cola de reproducción (Q)"
-          title={`Cola de reproducción (${queueCount}) (Q)`}
-          onClick={onToggleQueue}
-          className={cn(
-            "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
-            isQueueOpen && "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-[0_0_12px_rgba(45,212,191,0.3)]",
-          )}
-        >
-          <ListMusic className="size-3.5" />
-          {queueCount > 0 && (
-            <span className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center rounded-full bg-teal-400 text-[8px] font-bold text-black shadow-xs">
-              {queueCount > 9 ? "9+" : queueCount}
+          {/* Fila 2: Barra de Progreso Fina e Integrada */}
+          <div className="flex items-center gap-2 px-1 pt-0.5">
+            <span className="w-7 shrink-0 text-right text-[10px] tabular-nums text-white/50">
+              {formatDuration(position)}
             </span>
-          )}
-        </GlassButton>
-
-        {onToggleLyrics && (
-          <GlassButton
-            variant="ghost"
-            size="md"
-            aria-label="Letras sincronizadas (Y)"
-            title="Letras en tiempo real (Y)"
-            onClick={onToggleLyrics}
-            className={cn(
-              "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
-              isLyricsOpen && "bg-indigo-500/25 text-indigo-300 border-indigo-400/40 shadow-[0_0_12px_rgba(99,102,241,0.35)]",
-            )}
-          >
-            <Mic2 className="size-3.5" />
-          </GlassButton>
-        )}
-
-        <GlassButton
-          variant="ghost"
-          size="md"
-          aria-label={showAudioFx ? "Ocultar efectos de audio" : "Mostrar efectos de audio"}
-          title="Efectos de audio y velocidad (EQ)"
-          onClick={() => setShowAudioFx((prev) => !prev)}
-          className={cn(
-            "relative border-white/5 hover:bg-white/[0.1] hover:text-white",
-            (showAudioFx || (playerState?.audio_preset ?? "normal") !== "normal" || (playerState?.speed ?? 1.0) !== 1.0) &&
-              "bg-purple-500/20 text-purple-300 border-purple-400/40 shadow-[0_0_10px_rgba(168,85,247,0.3)]",
-          )}
-        >
-          <Sliders className="size-3.5" />
-        </GlassButton>
-
-        {onOpenImmersive && (
-          <GlassButton
-            variant="ghost"
-            size="md"
-            aria-label="Modo Inmersivo (I)"
-            title="Modo Inmersivo Apple Music (I)"
-            onClick={onOpenImmersive}
-            className="border-white/5 hover:bg-white/[0.1] hover:text-white text-amber-300"
-          >
-            <Sparkles className="size-3.5" />
-          </GlassButton>
-        )}
-      </div>
-
-      {/* Control de Volumen Líquido */}
-      <div className="flex items-center gap-2 px-1 pt-0.5">
-        <button
-          type="button"
-          onClick={onToggleMute}
-          className="text-white/60 hover:text-white transition-colors"
-          aria-label={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
-          title={volume === 0 ? "Activar sonido (M)" : "Silenciar (M)"}
-        >
-          {volume === 0 ? (
-            <VolumeX className="size-3.5 shrink-0 text-rose-300" />
-          ) : (
-            <Volume2 className="size-3.5 shrink-0 text-white/60" />
-          )}
-        </button>
-        <Slider
-          className="flex-1"
-          value={[volume]}
-          max={100}
-          step={1}
-          variant="glass"
-          onValueChange={([level]) => onVolumePreview(level)}
-          onValueCommit={([level]) => onVolumeCommit(level)}
-          aria-label="Volumen"
-          aria-valuetext={`${volume}%`}
-        />
-        <span className="w-6 shrink-0 text-right text-[10px] tabular-nums text-white/60">
-          {volume}
-        </span>
-      </div>
+            <Slider
+              className="flex-1 cursor-pointer"
+              value={[position]}
+              max={Math.max(duration, 1)}
+              step={1}
+              variant="glass"
+              onValueChange={([value]) => onSeekPreview(value)}
+              onValueCommit={([value]) => onSeekCommit(value)}
+              aria-label="Posición de reproducción"
+              aria-valuetext={`${formatDuration(position)} de ${formatDuration(duration)}`}
+            />
+            <span className="w-7 shrink-0 text-[10px] tabular-nums text-white/50">
+              {formatDuration(duration)}
+            </span>
+          </div>
+        </>
+      )}
 
       {/* Audio FX Presets & Velocidad colapsable */}
       {showAudioFx && (
-        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-white/5 text-[10px] animate-in fade-in duration-200">
+        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-white/10 text-[10px] animate-in fade-in duration-200">
           <div className="flex items-center gap-1 overflow-x-auto py-0.5 no-scrollbar">
             {AUDIO_PRESETS.map((p) => {
               const active = (playerState?.audio_preset ?? "normal") === p.id;
@@ -886,7 +899,7 @@ const NowPlaying = React.memo(function NowPlaying({
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => onSelectPreset(p.id)}
+                  onClick={() => onSelectPreset?.(p.id)}
                   className={cn(
                     "flex items-center gap-1 px-2 py-0.5 rounded-lg transition-all duration-200 border whitespace-nowrap",
                     active
@@ -902,21 +915,23 @@ const NowPlaying = React.memo(function NowPlaying({
             })}
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={onCycleSpeed}
-              className={cn(
-                "px-2 py-0.5 rounded-lg border text-[10px] font-mono transition-all",
-                (playerState?.speed ?? 1.0) !== 1.0
-                  ? "bg-purple-500/20 border-purple-400/40 text-purple-200 shadow-[0_0_8px_rgba(168,85,247,0.25)]"
-                  : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white"
-              )}
-              title="Cambiar velocidad de reproducción"
-            >
-              {(playerState?.speed ?? 1.0).toFixed(2)}x
-            </button>
-          </div>
+          {onCycleSpeed && (
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={onCycleSpeed}
+                className={cn(
+                  "px-2 py-0.5 rounded-lg border text-[10px] font-mono transition-all",
+                  (playerState?.speed ?? 1.0) !== 1.0
+                    ? "bg-purple-500/20 border-purple-400/40 text-purple-200 shadow-[0_0_8px_rgba(168,85,247,0.25)]"
+                    : "bg-white/[0.03] border-white/5 text-white/60 hover:text-white"
+                )}
+                title="Cambiar velocidad de reproducción"
+              >
+                {(playerState?.speed ?? 1.0).toFixed(2)}x
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -2088,7 +2103,7 @@ function App() {
                     {results.length > 0 && (
                       <div className="flex min-h-0 flex-1 flex-col gap-2">
                         <ScrollArea className="min-h-0 flex-1 pr-1">
-                          <ol className="flex flex-col gap-1.5">
+                          <ol className="flex flex-col gap-1.5 pb-32">
                             {searchResults.map((track, index) => {
                               const isCurrentItemLoading = loadingTrackId === track.id;
                               const isCurrentTrackPlaying = playerState?.current?.id === track.id;
@@ -2181,7 +2196,7 @@ function App() {
                           </button>
                         </div>
                         <ScrollArea className="min-h-0 flex-1 pr-1">
-                          <ol className="flex flex-col gap-1.5">
+                          <ol className="flex flex-col gap-1.5 pb-32">
                             {recentTracksMemo.map((track) => {
                               const isCurrentItemLoading = loadingTrackId === track.id;
                               const isCurrentTrackPlaying = playerState?.current?.id === track.id;
@@ -2258,7 +2273,7 @@ function App() {
           </div>
         )}
 
-        {/* Música: dock compacto en Focus y Letras (en pantalla compacta), reproductor flotante en Biblioteca o Split View */}
+        {/* Dock Flotante de Música: Superpuesto e isla de vidrio sobre las canciones */}
         {isFocusView ? (
           <FocusNowPlayingDock
             playerState={playerState}
@@ -2269,48 +2284,54 @@ function App() {
             onOpenLibrary={() => setIsFocusView(false)}
           />
         ) : (isLyricsOpen && !isWide) ? (
-          <NowPlayingMiniDock
-            playerState={playerState}
-            isTrackLoading={isTrackLoading}
-            isPlaying={isPlaying}
-            dragPosition={dragPosition}
-            onTogglePlayback={handleTogglePlayback}
-            onPrevious={handlePrevious}
-            onNext={handleNext}
-            onSeekPreview={setDragPosition}
-            onSeekCommit={handleSeekCommit}
-            onCloseLyrics={() => setIsLyricsOpen(false)}
-            onOpenImmersive={() => setIsImmersiveOpen(true)}
-          />
-        ) : (
-          (isTrackLoading || playerState?.current) && (
-            <div className={cn("w-full transition-all duration-300", isWide && "max-w-2xl mx-auto")}>
-              <NowPlaying
+          <div className="pointer-events-none absolute bottom-3.5 inset-x-0 z-30 flex justify-center px-3 sm:px-4">
+            <div className="pointer-events-auto w-full max-w-lg transition-all duration-300">
+              <NowPlayingMiniDock
                 playerState={playerState}
                 isTrackLoading={isTrackLoading}
                 isPlaying={isPlaying}
-                isLooping={isLooping}
                 dragPosition={dragPosition}
                 onTogglePlayback={handleTogglePlayback}
-                onToggleLoop={handleToggleLoop}
-                onStop={handleStop}
-                onNext={handleNext}
                 onPrevious={handlePrevious}
-                onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
-                isQueueOpen={isQueueOpen}
-                queueCount={queue.length}
-                onToggleLyrics={handleToggleLyrics}
-                isLyricsOpen={isLyricsOpen}
+                onNext={handleNext}
                 onSeekPreview={setDragPosition}
                 onSeekCommit={handleSeekCommit}
-                onVolumePreview={handleVolumePreview}
-                onVolumeCommit={handleVolumeCommit}
-                onToggleMute={handleToggleMute}
-                volume={volume}
-                onSelectPreset={handleSelectPreset}
-                onCycleSpeed={handleCycleSpeed}
+                onCloseLyrics={() => setIsLyricsOpen(false)}
                 onOpenImmersive={() => setIsImmersiveOpen(true)}
               />
+            </div>
+          </div>
+        ) : (
+          (isTrackLoading || playerState?.current) && (
+            <div className="pointer-events-none absolute bottom-3.5 inset-x-0 z-30 flex justify-center px-3 sm:px-4">
+              <div className="pointer-events-auto w-full max-w-2xl transition-all duration-300">
+                <NowPlaying
+                  playerState={playerState}
+                  isTrackLoading={isTrackLoading}
+                  isPlaying={isPlaying}
+                  isLooping={isLooping}
+                  dragPosition={dragPosition}
+                  onTogglePlayback={handleTogglePlayback}
+                  onToggleLoop={handleToggleLoop}
+                  onStop={handleStop}
+                  onNext={handleNext}
+                  onPrevious={handlePrevious}
+                  onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
+                  isQueueOpen={isQueueOpen}
+                  queueCount={queue.length}
+                  onToggleLyrics={handleToggleLyrics}
+                  isLyricsOpen={isLyricsOpen}
+                  onSeekPreview={setDragPosition}
+                  onSeekCommit={handleSeekCommit}
+                  onVolumePreview={handleVolumePreview}
+                  onVolumeCommit={handleVolumeCommit}
+                  onToggleMute={handleToggleMute}
+                  volume={volume}
+                  onSelectPreset={handleSelectPreset}
+                  onCycleSpeed={handleCycleSpeed}
+                  onOpenImmersive={() => setIsImmersiveOpen(true)}
+                />
+              </div>
             </div>
           )
         )}
