@@ -24,6 +24,7 @@ import {
   SkipBack,
   SkipForward,
   Sliders,
+  Sparkles,
   Square,
   Volume2,
   VolumeX,
@@ -40,6 +41,7 @@ import {
   FocusWidget,
 } from "@/components/focus/FocusStudio";
 import { LyricsPanel } from "@/components/lyrics/LyricsPanel";
+import { ImmersivePlayer } from "@/components/player/ImmersivePlayer";
 import { cn } from "@/lib/utils";
 import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
 import { extractDominantColor } from "@/lib/album-color";
@@ -113,6 +115,7 @@ interface AlbumHeroProps {
   onTogglePlayback: () => void;
   onToggleLoop: () => void;
   onToggleLyrics: () => void;
+  onOpenImmersive?: () => void;
 }
 
 const AlbumHero = React.memo(function AlbumHero({
@@ -123,17 +126,22 @@ const AlbumHero = React.memo(function AlbumHero({
   onTogglePlayback,
   onToggleLoop,
   onToggleLyrics,
+  onOpenImmersive,
 }: AlbumHeroProps) {
   if (!currentTrack) return null;
 
   return (
     <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-4 p-4 rounded-2xl bg-white/[0.03] border border-white/10 shadow-lg backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative size-28 sm:size-32 shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-[0_12px_28px_rgba(0,0,0,0.6)]">
+      <div
+        onClick={onOpenImmersive}
+        className="relative size-28 sm:size-32 shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-[0_12px_28px_rgba(0,0,0,0.6)] cursor-pointer hover:scale-102 active:scale-98 transition-all group"
+        title="Abrir vista inmersiva (I)"
+      >
         {currentTrack.thumbnail_url ? (
           <img
             src={currentTrack.thumbnail_url}
             alt=""
-            className="size-full object-cover"
+            className="size-full object-cover group-hover:scale-105 transition-transform duration-300"
           />
         ) : (
           <div className="size-full flex items-center justify-center bg-teal-500/10">
@@ -200,6 +208,18 @@ const AlbumHero = React.memo(function AlbumHero({
             <Mic2 className="size-3.5" />
             <span>Letras</span>
           </button>
+
+          {onOpenImmersive && (
+            <button
+              type="button"
+              onClick={onOpenImmersive}
+              className="px-3 py-1.5 rounded-full border border-white/10 text-white/75 hover:text-white hover:bg-white/10 transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-sm"
+              title="Abrir vista inmersiva Apple Music (I)"
+            >
+              <Sparkles className="size-3.5 text-amber-300" />
+              <span className="hidden sm:inline">Inmersivo</span>
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -562,6 +582,7 @@ interface NowPlayingProps {
   onVolumeCommit: (level: number) => void;
   onToggleMute: () => void;
   volume: number;
+  onOpenImmersive?: () => void;
 }
 
 const NowPlaying = React.memo(function NowPlaying({
@@ -588,6 +609,7 @@ const NowPlaying = React.memo(function NowPlaying({
   volume,
   onSelectPreset,
   onCycleSpeed,
+  onOpenImmersive,
 }: NowPlayingProps) {
   const [showAudioFx, setShowAudioFx] = useState(false);
   const current = playerState?.current;
@@ -618,7 +640,11 @@ const NowPlaying = React.memo(function NowPlaying({
 
       {current && (
         <div className="flex items-center gap-3">
-          <SpecularRing className="size-12 shrink-0">
+          <SpecularRing
+            className="size-12 shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform"
+            onClick={onOpenImmersive}
+            title="Abrir Modo Inmersivo Apple Music (I)"
+          >
             <div
               className={cn(
                 "overflow-hidden rounded-xl bg-white/10 transition-all duration-300",
@@ -804,6 +830,19 @@ const NowPlaying = React.memo(function NowPlaying({
         >
           <Sliders className="size-3.5" />
         </GlassButton>
+
+        {onOpenImmersive && (
+          <GlassButton
+            variant="ghost"
+            size="md"
+            aria-label="Modo Inmersivo (I)"
+            title="Modo Inmersivo Apple Music (I)"
+            onClick={onOpenImmersive}
+            className="border-white/5 hover:bg-white/[0.1] hover:text-white text-amber-300"
+          >
+            <Sparkles className="size-3.5" />
+          </GlassButton>
+        )}
       </div>
 
       {/* Control de Volumen Líquido */}
@@ -895,6 +934,7 @@ interface NowPlayingMiniDockProps {
   onSeekPreview: (position: number) => void;
   onSeekCommit: (position: number) => void;
   onCloseLyrics: () => void;
+  onOpenImmersive?: () => void;
 }
 
 const NowPlayingMiniDock = React.memo(function NowPlayingMiniDock({
@@ -908,6 +948,7 @@ const NowPlayingMiniDock = React.memo(function NowPlayingMiniDock({
   onSeekPreview,
   onSeekCommit,
   onCloseLyrics,
+  onOpenImmersive,
 }: NowPlayingMiniDockProps) {
   const current = playerState?.current;
   const duration = safeDuration(playerState?.duration_seconds ?? 0);
@@ -952,7 +993,11 @@ const NowPlayingMiniDock = React.memo(function NowPlayingMiniDock({
 
       <div className="flex items-center gap-2.5 px-3 py-1.5">
         {/* Carátula */}
-        <div className="relative size-8 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-white/5">
+        <div
+          onClick={onOpenImmersive}
+          className="relative size-8 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-white/5 cursor-pointer hover:scale-105 active:scale-95 transition-all"
+          title="Abrir vista inmersiva Apple Music (I)"
+        >
           {current?.thumbnail_url ? (
             <img
               src={current.thumbnail_url}
@@ -1032,6 +1077,19 @@ const NowPlayingMiniDock = React.memo(function NowPlayingMiniDock({
             <SkipForward className="size-3 fill-current" />
           </GlassButton>
 
+          {onOpenImmersive && (
+            <GlassButton
+              variant="ghost"
+              size="sm"
+              aria-label="Modo Inmersivo (I)"
+              title="Modo Inmersivo Apple Music (I)"
+              onClick={onOpenImmersive}
+              className="border-white/5 hover:bg-white/[0.1] hover:text-white text-amber-300"
+            >
+              <Sparkles className="size-3" />
+            </GlassButton>
+          )}
+
           <GlassButton
             variant="ghost"
             size="sm"
@@ -1064,6 +1122,7 @@ function App() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState(false);
+  const [isImmersiveOpen, setIsImmersiveOpen] = useState(false);
   const [lyricsDoc, setLyricsDoc] = useState<LyricsDoc | null>(null);
   const [isLyricsLoading, setIsLyricsLoading] = useState(false);
   const [prevVolume, setPrevVolume] = useState<number>(100);
@@ -1451,6 +1510,11 @@ function App() {
       };
 
       if (e.key === "Escape") {
+        if (isImmersiveOpen) {
+          e.preventDefault();
+          setIsImmersiveOpen(false);
+          return;
+        }
         if (isLyricsOpen) {
           e.preventDefault();
           setIsLyricsOpen(false);
@@ -1464,6 +1528,9 @@ function App() {
       } else if (!isSearchFocused && e.shiftKey && (e.key === "F" || e.key === "f")) {
         e.preventDefault();
         setIsFocusView((prev) => !prev);
+      } else if (!isSearchFocused && !e.shiftKey && (e.key === "i" || e.key === "I")) {
+        e.preventDefault();
+        setIsImmersiveOpen((prev) => !prev);
       } else if (e.key === "/" && !isSearchFocused) {
         e.preventDefault();
         focusSearch();
@@ -1515,6 +1582,7 @@ function App() {
     focusState?.is_running,
     isFocusView,
     isLyricsOpen,
+    isImmersiveOpen,
     handleNext,
     handlePauseFocus,
     handlePrevious,
@@ -2092,6 +2160,7 @@ function App() {
                         onTogglePlayback={handleTogglePlayback}
                         onToggleLoop={handleToggleLoop}
                         onToggleLyrics={handleToggleLyrics}
+                        onOpenImmersive={() => setIsImmersiveOpen(true)}
                       />
                     )}
 
@@ -2211,6 +2280,7 @@ function App() {
             onSeekPreview={setDragPosition}
             onSeekCommit={handleSeekCommit}
             onCloseLyrics={() => setIsLyricsOpen(false)}
+            onOpenImmersive={() => setIsImmersiveOpen(true)}
           />
         ) : (
           (isTrackLoading || playerState?.current) && (
@@ -2239,11 +2309,37 @@ function App() {
                 volume={volume}
                 onSelectPreset={handleSelectPreset}
                 onCycleSpeed={handleCycleSpeed}
+                onOpenImmersive={() => setIsImmersiveOpen(true)}
               />
             </div>
           )
         )}
       </GlassPanel>
+
+      {/* Modo Inmersivo Teatro a Pantalla Completa estilo Apple Music */}
+      {isImmersiveOpen && (
+        <ImmersivePlayer
+          currentTrack={playerState?.current ?? null}
+          playerState={playerState}
+          lyricsDoc={lyricsDoc}
+          isLyricsLoading={isLyricsLoading}
+          isPlaying={isPlaying}
+          isLooping={isLooping}
+          dragPosition={dragPosition}
+          volume={volume}
+          onTogglePlayback={handleTogglePlayback}
+          onToggleLoop={handleToggleLoop}
+          onPrevious={handlePrevious}
+          onNext={handleNext}
+          onSeekPreview={setDragPosition}
+          onSeekCommit={handleSeekCommit}
+          onVolumePreview={handleVolumePreview}
+          onVolumeCommit={handleVolumeCommit}
+          onToggleMute={handleToggleMute}
+          onSelectPreset={handleSelectPreset}
+          onClose={() => setIsImmersiveOpen(false)}
+        />
+      )}
     </main>
   );
 }
