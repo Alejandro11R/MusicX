@@ -258,27 +258,28 @@
 /* Individual Line Item (Fluid clamp font size + Apple Music spring transition) */
 .lyric-line-item {
   position: relative;
-  font-size: clamp(1.1rem, 3.2cqw, 1.35rem);
-  line-height: 1.45;
+  font-size: clamp(1.15rem, 3.2cqw, 1.45rem);
+  line-height: 1.5;
   font-weight: 600;
-  letter-spacing: -0.012em;
-  padding: 0.35rem 0.65rem;
-  border-radius: 10px;
+  letter-spacing: -0.015em;
+  padding: 0.35rem 0.75rem;
+  border-radius: 12px;
   transform-origin: left center;
   transition:
     transform 380ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 300ms ease,
-    filter 300ms ease,
+    opacity 350ms ease,
+    filter 350ms ease,
     color 250ms ease;
   will-change: transform, opacity, filter;
   cursor: pointer;
 }
 
-/* Past lines */
+/* Past lines: Apple Music style soft blur and lower opacity */
 .lyric-line-past {
-  color: rgba(255, 255, 255, 0.32);
+  color: rgba(255, 255, 255, 0.55);
+  opacity: 0.35;
+  filter: blur(1.5px);
   transform: scale(0.98);
-  filter: blur(0.3px);
 }
 
 /* Active Line (Apple Music Bright Highlight + Soft Aura Glow) */
@@ -289,15 +290,16 @@
   filter: none;
   opacity: 1;
   text-shadow:
-    0 0 16px rgba(255, 255, 255, 0.5),
-    0 0 30px var(--palette-primary, rgba(99, 102, 241, 0.4));
+    0 0 18px rgba(255, 255, 255, 0.6),
+    0 0 34px var(--palette-primary, rgba(99, 102, 241, 0.45));
 }
 
-/* Future lines */
+/* Future lines: deeper blur and very faint opacity */
 .lyric-line-future {
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.5);
+  opacity: 0.16;
+  filter: blur(2.5px);
   transform: scale(0.98);
-  filter: blur(0.3px);
 }
 
 /* Hover: Line preview with quick seek affordance */
@@ -396,5 +398,62 @@
   }
   .lyrics-stack {
     gap: 0.85rem;
+  }
+}
+
+/* ============================================================
+   Apple Music Style Equalizer Bars (Hardware Accelerated)
+   Zero CPU overhead: purely CSS composite-thread transform
+   ============================================================ */
+.cadence-eq-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  width: 13px;
+}
+
+.cadence-eq-bar {
+  width: 2.5px;
+  background: var(--cadence-accent, #2dd4bf);
+  border-radius: 9999px;
+  transform-origin: bottom;
+  will-change: transform;
+}
+
+.cadence-eq-bar:nth-child(1) {
+  height: 60%;
+  animation: eqBounce1 0.75s ease-in-out infinite alternate;
+}
+
+.cadence-eq-bar:nth-child(2) {
+  height: 100%;
+  animation: eqBounce2 0.95s ease-in-out infinite alternate;
+}
+
+.cadence-eq-bar:nth-child(3) {
+  height: 45%;
+  animation: eqBounce3 0.82s ease-in-out infinite alternate;
+}
+
+@keyframes eqBounce1 {
+  0% { transform: scaleY(0.3); }
+  100% { transform: scaleY(1); }
+}
+
+@keyframes eqBounce2 {
+  0% { transform: scaleY(1); }
+  100% { transform: scaleY(0.35); }
+}
+
+@keyframes eqBounce3 {
+  0% { transform: scaleY(0.4); }
+  100% { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cadence-eq-bar {
+    animation: none !important;
+    transform: scaleY(0.7) !important;
   }
 }

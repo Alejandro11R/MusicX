@@ -13,6 +13,7 @@ import {
   Link2,
   ListMusic,
   Loader2,
+  Maximize2,
   Mic2,
   Minus,
   Pause,
@@ -94,6 +95,117 @@ const SEEK_GUARD_MS = 1200;
 
 // ===== Memoized Components =====
 
+function EqualizerBars({ className }: { className?: string }) {
+  return (
+    <div className={cn("cadence-eq-bars", className)} aria-label="Reproduciendo">
+      <span className="cadence-eq-bar" />
+      <span className="cadence-eq-bar" />
+      <span className="cadence-eq-bar" />
+    </div>
+  );
+}
+
+interface AlbumHeroProps {
+  currentTrack: SearchResult | null;
+  isPlaying: boolean;
+  isLooping: boolean;
+  isLyricsOpen: boolean;
+  onTogglePlayback: () => void;
+  onToggleLoop: () => void;
+  onToggleLyrics: () => void;
+}
+
+const AlbumHero = React.memo(function AlbumHero({
+  currentTrack,
+  isPlaying,
+  isLooping,
+  isLyricsOpen,
+  onTogglePlayback,
+  onToggleLoop,
+  onToggleLyrics,
+}: AlbumHeroProps) {
+  if (!currentTrack) return null;
+
+  return (
+    <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-4 p-4 rounded-2xl bg-white/[0.03] border border-white/10 shadow-lg backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative size-28 sm:size-32 shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-[0_12px_28px_rgba(0,0,0,0.6)]">
+        {currentTrack.thumbnail_url ? (
+          <img
+            src={currentTrack.thumbnail_url}
+            alt=""
+            className="size-full object-cover"
+          />
+        ) : (
+          <div className="size-full flex items-center justify-center bg-teal-500/10">
+            <Headphones className="size-10 text-teal-300" />
+          </div>
+        )}
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1 text-center sm:text-left">
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-teal-400">
+          En reproducción
+        </span>
+        <h2 className="text-base sm:text-lg font-bold text-white leading-tight truncate">
+          {currentTrack.title}
+        </h2>
+        <p className="text-xs text-white/60 truncate">
+          {currentTrack.artist || "Cadence Music"}
+        </p>
+
+        <div className="flex items-center justify-center sm:justify-start gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onTogglePlayback}
+            className="px-4 py-1.5 rounded-full bg-white text-black font-semibold text-xs hover:bg-white/90 active:scale-95 transition-all flex items-center gap-1.5 shadow-md cursor-pointer"
+          >
+            {isPlaying ? (
+              <>
+                <Pause className="size-3.5 fill-black text-black" />
+                <span>Pausar</span>
+              </>
+            ) : (
+              <>
+                <Play className="size-3.5 fill-black text-black ml-0.5" />
+                <span>Reproducir</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleLoop}
+            className={cn(
+              "p-1.5 rounded-full border transition-all text-xs cursor-pointer",
+              isLooping
+                ? "bg-teal-400/20 text-teal-300 border-teal-400/40 shadow-sm"
+                : "border-white/10 text-white/70 hover:text-white hover:bg-white/10"
+            )}
+            title={isLooping ? "Bucle activo" : "Activar bucle"}
+          >
+            <Repeat className="size-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleLyrics}
+            className={cn(
+              "px-3 py-1.5 rounded-full border transition-all text-xs flex items-center gap-1.5 cursor-pointer",
+              isLyricsOpen
+                ? "bg-indigo-500/25 text-indigo-300 border-indigo-400/40 shadow-sm"
+                : "border-white/10 text-white/70 hover:text-white hover:bg-white/10"
+            )}
+            title="Ver letras sincronizadas"
+          >
+            <Mic2 className="size-3.5" />
+            <span>Letras</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 interface SearchResultItemProps {
   track: SearchResult;
   isSelected: boolean;
@@ -142,11 +254,15 @@ const SearchResultItem = React.memo(function SearchResultItem({
           ) : (
             <Headphones className="size-5 text-teal-300/80" />
           )}
-          {isLoading && (
+          {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
               <Loader2 className="size-4 animate-spin text-teal-300" />
             </div>
-          )}
+          ) : isPlaying ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/55 backdrop-blur-[1px] animate-in fade-in duration-150">
+              <EqualizerBars />
+            </div>
+          ) : null}
         </div>
         <div className="flex min-w-0 flex-1 flex-col justify-center">
           <span
@@ -232,11 +348,15 @@ const RecentTrackItem = React.memo(function RecentTrackItem({
           ) : (
             <Headphones className="size-5 text-teal-300/80" />
           )}
-          {isLoading && (
+          {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-xs">
               <Loader2 className="size-4 animate-spin text-teal-300" />
             </div>
-          )}
+          ) : isPlaying ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/55 backdrop-blur-[1px] animate-in fade-in duration-150">
+              <EqualizerBars />
+            </div>
+          ) : null}
         </div>
         <div className="flex min-w-0 flex-1 flex-col justify-center">
           <span
@@ -363,7 +483,7 @@ const QueuePanel = React.memo(function QueuePanel({
                         />
                         {isCurrent && (
                           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs">
-                            <Play className="size-3.5 fill-teal-300 text-teal-300" />
+                            <EqualizerBars />
                           </div>
                         )}
                       </div>
@@ -948,12 +1068,49 @@ function App() {
   const [isLyricsLoading, setIsLyricsLoading] = useState(false);
   const [prevVolume, setPrevVolume] = useState<number>(100);
   const [focusState, setFocusState] = useState<FocusState | null>(null);
+  const [isWide, setIsWide] = useState(
+    typeof window !== "undefined" ? window.innerWidth >= 768 : false
+  );
+  const [isMaximized, setIsMaximized] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const playerStateRef = useRef<PlayerState | null>(null);
   const prevVolumeRef = useRef<number>(100);
   const searchAbortRef = useRef<AbortController | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
   const seekGuardRef = useRef<{ target: number; at: number } | null>(null);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsWide(window.innerWidth >= 768);
+    };
+    window.addEventListener("resize", handleResize);
+
+    getCurrentWindow().isMaximized().then(setIsMaximized).catch(() => {});
+    const unlistenPromise = getCurrentWindow().onResized(() => {
+      getCurrentWindow().isMaximized().then(setIsMaximized).catch(() => {});
+      setIsWide(window.innerWidth >= 768);
+    });
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, []);
+
+  const handleToggleMaximize = useCallback(async () => {
+    try {
+      const max = await getCurrentWindow().isMaximized();
+      if (max) {
+        await getCurrentWindow().unmaximize();
+        setIsMaximized(false);
+      } else {
+        await getCurrentWindow().maximize();
+        setIsMaximized(true);
+      }
+    } catch (err) {
+      console.error("Error toggle maximize:", err);
+    }
+  }, []);
 
   useEffect(() => {
     playerStateRef.current = playerState;
@@ -1713,6 +1870,15 @@ function App() {
           />
 
           <div className="flex items-center gap-1.5">
+            <GlassButton
+              variant="ghost"
+              size="sm"
+              aria-label={isMaximized ? "Restaurar ventana" : "Maximizar a Split View"}
+              title={isMaximized ? "Restaurar (Compacto)" : "Maximizar (Apple Music Split View)"}
+              onClick={handleToggleMaximize}
+            >
+              <Maximize2 className="size-3" />
+            </GlassButton>
             <GlassButton variant="ghost" size="sm" aria-label="Minimizar" onClick={() => getCurrentWindow().minimize()}>
               <Minus className="size-3" />
             </GlassButton>
@@ -1722,109 +1888,7 @@ function App() {
           </div>
         </header>
 
-        {/* Buscador de vidrio líquido — se oculta en Focus y en Letras para maximizar espacio */}
-        {!isFocusView && !isLyricsOpen && (
-        <div className="relative flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
-            <Input
-              ref={searchInputRef}
-              value={query}
-              onChange={(e) => setQuery(e.currentTarget.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Buscar en YouTube, pegar enlace o arrastrar archivo local..."
-              autoComplete="off"
-              className={cn(
-                "h-10 pl-9 rounded-xl bg-white/[0.06] backdrop-blur-md border-white/10 hover:border-white/20 focus-visible:border-teal-400/50 focus-visible:ring-2 focus-visible:ring-teal-400/20 text-xs transition-all placeholder:text-white/40",
-                isYoutubeUrl || isLocalAudioPath ? "pr-24" : "pr-9",
-              )}
-            />
-            {isYoutubeUrl && (
-              <div className="absolute right-9 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-teal-400/20 border border-teal-400/30 text-[10px] text-teal-300 pointer-events-none select-none">
-                <Link2 className="size-3" />
-                <span>Enlace</span>
-              </div>
-            )}
-            {isLocalAudioPath && (
-              <div className="absolute right-9 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-400/20 border border-emerald-400/30 text-[10px] text-emerald-300 pointer-events-none select-none">
-                <Headphones className="size-3" />
-                <span>Local</span>
-              </div>
-            )}
-            {query.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setQuery("");
-                  setResults([]);
-                  setResultsQuery("");
-                  setSelectedIndex(null);
-                  searchInputRef.current?.focus();
-                }}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-white/40 hover:text-white/90 transition-colors"
-                aria-label="Limpiar búsqueda"
-              >
-                <X className="size-3.5" />
-              </button>
-            )}
-          </div>
-          <GlassButton
-            type="button"
-            size="md"
-            aria-label="Buscar"
-            onClick={() => runSearch(query)}
-            disabled={isSearching}
-          >
-            {isSearching ? (
-              <Loader2 className="size-4 animate-spin text-teal-300" />
-            ) : (
-              <Search className="size-4 text-white/80" />
-            )}
-          </GlassButton>
-        </div>
-        )}
-
-        {error && (
-          <div className="flex items-center justify-between rounded-lg bg-rose-500/15 border border-rose-500/30 px-3 py-1.5 text-xs text-rose-300" role="alert">
-            <span className="flex-1">{error}</span>
-            <button
-              type="button"
-              onClick={() => setError(null)}
-              className="text-rose-300/70 hover:text-rose-200 p-0.5 ml-2 transition-colors"
-              aria-label="Cerrar mensaje de error"
-            >
-              <X className="size-3" />
-            </button>
-          </div>
-        )}
-
-        {playerState?.connected === false && (
-          <div
-            className="flex items-center gap-2 rounded-lg bg-amber-400/15 border border-amber-400/30 px-3 py-1.5 text-xs text-amber-200"
-            role="status"
-            aria-live="polite"
-          >
-            <Loader2 className="size-3.5 shrink-0 animate-spin" />
-            <span className="flex-1">
-              Reconectando con el reproductor… la reproducción se reanudará sola.
-            </span>
-          </div>
-        )}
-
-        {/* Vista Central: Lyrics Engine, Focus Studio, Cola de Reproducción O Resultados / Recientes */}
-        {isLyricsOpen ? (
-          <LyricsPanel
-            currentTrack={playerState?.current ?? null}
-            lyricsDoc={lyricsDoc}
-            isLoading={isLyricsLoading}
-            positionSeconds={playerState?.position_seconds ?? 0}
-            isPlaying={isPlaying}
-            speed={playerState?.speed ?? 1.0}
-            onClose={() => setIsLyricsOpen(false)}
-            onSeek={handleSeekCommit}
-            onLyricsUpdated={(updated) => setLyricsDoc(updated)}
-          />
-        ) : isFocusView ? (
+        {isFocusView ? (
           focusState ? (
             <FocusStudio
               focusState={focusState}
@@ -1845,154 +1909,287 @@ function App() {
               <p className="text-xs text-white/55">Preparando Focus Studio…</p>
             </div>
           )
-        ) : isQueueOpen ? (
-          <QueuePanel
-            queue={queue}
-            currentTrackId={playerState?.current?.id}
-            onPlayItem={handlePlayQueueIndex}
-            onRemoveItem={handleRemoveFromQueue}
-            onClearQueue={handleClearQueue}
-            onClose={() => setIsQueueOpen(false)}
-          />
         ) : (
-          <>
-            {/* Resultados de Búsqueda */}
-            {results.length > 0 && (
-              <div className="flex min-h-0 flex-1 flex-col gap-2">
-                <ScrollArea className="min-h-0 flex-1 pr-1">
-                  <ol className="flex flex-col gap-1.5">
-                    {searchResults.map((track, index) => {
-                      const isCurrentItemLoading = loadingTrackId === track.id;
-                      const isCurrentTrackPlaying = playerState?.current?.id === track.id;
-
-                      return (
-                        <SearchResultItem
-                          key={track.id}
-                          track={track}
-                          isSelected={index === selectedIndex}
-                          isPlaying={isCurrentTrackPlaying}
-                          isLoading={isCurrentItemLoading}
-                          onClick={() => handlePlay(track)}
-                          onAddToQueue={(e) => handleAddToQueue(track, e)}
-                          onMouseEnter={() => setSelectedIndex(index)}
-                        />
-                      );
-                    })}
-                  </ol>
-                </ScrollArea>
-
-                <footer className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-white/60">
-                  <span className="flex items-center gap-1">
-                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                      ↑↓
-                    </kbd>
-                    Navegar
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                      Enter
-                    </kbd>
-                    Reproducir
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                      Espacio
-                    </kbd>
-                    Play/Pausa
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                      N / P
-                    </kbd>
-                    Sig/Ant
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                      Q
-                    </kbd>
-                    Cola
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
-                      Esc
-                    </kbd>
-                    Limpiar
-                  </span>
-                </footer>
-              </div>
-            )}
-
-            {/* Historial Reciente (cuando no hay búsqueda activa) */}
-            {results.length === 0 && resultsQuery === "" && recentTracksMemo.length > 0 && (
-              <div className="flex min-h-0 flex-1 flex-col gap-2">
-                <div className="flex items-center justify-between px-1">
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-white/70">
-                    <Clock className="size-3.5 text-teal-400" />
-                    Recientes
-                  </span>
-                  <button
+          /* Layout Principal: Modo Compacto (< 768px) o Split View Apple Music (>= 768px) */
+          <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-3.5 overflow-hidden">
+            {/* Columna Biblioteca / Búsqueda (Visible en modo ancho o cuando las letras no están activas) */}
+            {(!isLyricsOpen || isWide) && (
+              <div className={cn(
+                "flex flex-col min-h-0 gap-3 overflow-hidden transition-all duration-300",
+                isWide && isLyricsOpen ? "flex-1 md:w-[54%] lg:w-[56%]" : "flex-1 w-full"
+              )}>
+                {/* Buscador de vidrio líquido */}
+                <div className="relative flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
+                    <Input
+                      ref={searchInputRef}
+                      value={query}
+                      onChange={(e) => setQuery(e.currentTarget.value)}
+                      onKeyDown={handleSearchKeyDown}
+                      placeholder="Buscar en YouTube, pegar enlace o arrastrar archivo local..."
+                      autoComplete="off"
+                      className={cn(
+                        "h-10 pl-9 rounded-xl bg-white/[0.06] backdrop-blur-md border-white/10 hover:border-white/20 focus-visible:border-teal-400/50 focus-visible:ring-2 focus-visible:ring-teal-400/20 text-xs transition-all placeholder:text-white/40",
+                        isYoutubeUrl || isLocalAudioPath ? "pr-24" : "pr-9",
+                      )}
+                    />
+                    {isYoutubeUrl && (
+                      <div className="absolute right-9 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-teal-400/20 border border-teal-400/30 text-[10px] text-teal-300 pointer-events-none select-none">
+                        <Link2 className="size-3" />
+                        <span>Enlace</span>
+                      </div>
+                    )}
+                    {isLocalAudioPath && (
+                      <div className="absolute right-9 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-400/20 border border-emerald-400/30 text-[10px] text-emerald-300 pointer-events-none select-none">
+                        <Headphones className="size-3" />
+                        <span>Local</span>
+                      </div>
+                    )}
+                    {query.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuery("");
+                          setResults([]);
+                          setResultsQuery("");
+                          setSelectedIndex(null);
+                          searchInputRef.current?.focus();
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-white/40 hover:text-white/90 transition-colors"
+                        aria-label="Limpiar búsqueda"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <GlassButton
                     type="button"
-                    onClick={clearRecent}
-                    className="text-[10px] text-white/50 hover:text-white/90 transition-colors"
+                    size="md"
+                    aria-label="Buscar"
+                    onClick={() => runSearch(query)}
+                    disabled={isSearching}
                   >
-                    Limpiar
-                  </button>
+                    {isSearching ? (
+                      <Loader2 className="size-4 animate-spin text-teal-300" />
+                    ) : (
+                      <Search className="size-4 text-white/80" />
+                    )}
+                  </GlassButton>
                 </div>
-                <ScrollArea className="min-h-0 flex-1 pr-1">
-                  <ol className="flex flex-col gap-1.5">
-                    {recentTracksMemo.map((track) => {
-                      const isCurrentItemLoading = loadingTrackId === track.id;
-                      const isCurrentTrackPlaying = playerState?.current?.id === track.id;
 
-                      return (
-                        <RecentTrackItem
-                          key={track.id}
-                          track={track}
-                          isPlaying={isCurrentTrackPlaying}
-                          isLoading={isCurrentItemLoading}
-                          onClick={() => handlePlay(track)}
-                          onAddToQueue={(e) => handleAddToQueue(track, e)}
-                        />
-                      );
-                    })}
-                  </ol>
-                </ScrollArea>
+                {error && (
+                  <div className="flex items-center justify-between rounded-lg bg-rose-500/15 border border-rose-500/30 px-3 py-1.5 text-xs text-rose-300" role="alert">
+                    <span className="flex-1">{error}</span>
+                    <button
+                      type="button"
+                      onClick={() => setError(null)}
+                      className="text-rose-300/70 hover:text-rose-200 p-0.5 ml-2 transition-colors"
+                      aria-label="Cerrar mensaje de error"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                )}
+
+                {playerState?.connected === false && (
+                  <div
+                    className="flex items-center gap-2 rounded-lg bg-amber-400/15 border border-amber-400/30 px-3 py-1.5 text-xs text-amber-200"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <Loader2 className="size-3.5 shrink-0 animate-spin" />
+                    <span className="flex-1">
+                      Reconectando con el reproductor… la reproducción se reanudará sola.
+                    </span>
+                  </div>
+                )}
+
+                {isQueueOpen ? (
+                  <QueuePanel
+                    queue={queue}
+                    currentTrackId={playerState?.current?.id}
+                    onPlayItem={handlePlayQueueIndex}
+                    onRemoveItem={handleRemoveFromQueue}
+                    onClearQueue={handleClearQueue}
+                    onClose={() => setIsQueueOpen(false)}
+                  />
+                ) : (
+                  <>
+                    {/* Resultados de Búsqueda */}
+                    {results.length > 0 && (
+                      <div className="flex min-h-0 flex-1 flex-col gap-2">
+                        <ScrollArea className="min-h-0 flex-1 pr-1">
+                          <ol className="flex flex-col gap-1.5">
+                            {searchResults.map((track, index) => {
+                              const isCurrentItemLoading = loadingTrackId === track.id;
+                              const isCurrentTrackPlaying = playerState?.current?.id === track.id;
+
+                              return (
+                                <SearchResultItem
+                                  key={track.id}
+                                  track={track}
+                                  isSelected={index === selectedIndex}
+                                  isPlaying={isCurrentTrackPlaying}
+                                  isLoading={isCurrentItemLoading}
+                                  onClick={() => handlePlay(track)}
+                                  onAddToQueue={(e) => handleAddToQueue(track, e)}
+                                  onMouseEnter={() => setSelectedIndex(index)}
+                                />
+                              );
+                            })}
+                          </ol>
+                        </ScrollArea>
+
+                        <footer className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-white/60">
+                          <span className="flex items-center gap-1">
+                            <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                              ↑↓
+                            </kbd>
+                            Navegar
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                              Enter
+                            </kbd>
+                            Reproducir
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                              Espacio
+                            </kbd>
+                            Play/Pausa
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                              N / P
+                            </kbd>
+                            Sig/Ant
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                              Q
+                            </kbd>
+                            Cola
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <kbd className="rounded bg-white/10 px-1 py-0.2 font-mono text-[10px]">
+                              Esc
+                            </kbd>
+                            Limpiar
+                          </span>
+                        </footer>
+                      </div>
+                    )}
+
+                    {/* Album Hero banner estilo Apple Music cuando hay pista activa y no hay búsqueda */}
+                    {results.length === 0 && resultsQuery === "" && playerState?.current && (
+                      <AlbumHero
+                        currentTrack={playerState.current}
+                        isPlaying={isPlaying}
+                        isLooping={isLooping}
+                        isLyricsOpen={isLyricsOpen}
+                        onTogglePlayback={handleTogglePlayback}
+                        onToggleLoop={handleToggleLoop}
+                        onToggleLyrics={handleToggleLyrics}
+                      />
+                    )}
+
+                    {/* Historial Reciente (cuando no hay búsqueda activa) */}
+                    {results.length === 0 && resultsQuery === "" && recentTracksMemo.length > 0 && (
+                      <div className="flex min-h-0 flex-1 flex-col gap-2">
+                        <div className="flex items-center justify-between px-1">
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-white/70">
+                            <Clock className="size-3.5 text-teal-400" />
+                            Recientes
+                          </span>
+                          <button
+                            type="button"
+                            onClick={clearRecent}
+                            className="text-[10px] text-white/50 hover:text-white/90 transition-colors cursor-pointer"
+                          >
+                            Limpiar
+                          </button>
+                        </div>
+                        <ScrollArea className="min-h-0 flex-1 pr-1">
+                          <ol className="flex flex-col gap-1.5">
+                            {recentTracksMemo.map((track) => {
+                              const isCurrentItemLoading = loadingTrackId === track.id;
+                              const isCurrentTrackPlaying = playerState?.current?.id === track.id;
+
+                              return (
+                                <RecentTrackItem
+                                  key={track.id}
+                                  track={track}
+                                  isPlaying={isCurrentTrackPlaying}
+                                  isLoading={isCurrentItemLoading}
+                                  onClick={() => handlePlay(track)}
+                                  onAddToQueue={(e) => handleAddToQueue(track, e)}
+                                />
+                              );
+                            })}
+                          </ol>
+                        </ScrollArea>
+                      </div>
+                    )}
+
+                    {/* Sin resultados de búsqueda */}
+                    {!isSearching && resultsQuery !== "" && results.length === 0 && (
+                      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
+                        <div className="size-12 rounded-2xl liquid-pill flex items-center justify-center text-white/50 shadow-md">
+                          <Search className="size-6 text-white/40" />
+                        </div>
+                        <div className="flex flex-col gap-1 max-w-[260px]">
+                          <p className="text-xs font-semibold text-white/90">Sin resultados</p>
+                          <p className="text-[11px] text-white/60">
+                            No se encontró nada para "{resultsQuery}". Intenta con otras palabras clave.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Pantalla vacía inicial de concentración si no hay nada en reproducción */}
+                    {results.length === 0 && resultsQuery === "" && !playerState?.current && recentTracksMemo.length === 0 && (
+                      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
+                        <div className="size-14 rounded-2xl liquid-pill flex items-center justify-center text-teal-300/80 shadow-lg">
+                          <Headphones className="size-7" />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <p className="text-sm font-medium text-white/90">Espacio de concentración</p>
+                          <p className="text-xs text-white/60 max-w-[240px]">
+                            Busca cualquier tema en YouTube o pega un enlace directo y empieza tu sesión.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             )}
 
-            {/* Sin resultados de búsqueda */}
-            {!isSearching && resultsQuery !== "" && results.length === 0 && (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
-                <div className="size-12 rounded-2xl liquid-pill flex items-center justify-center text-white/50 shadow-md">
-                  <Search className="size-6 text-white/40" />
-                </div>
-                <div className="flex flex-col gap-1 max-w-[260px]">
-                  <p className="text-xs font-semibold text-white/90">Sin resultados</p>
-                  <p className="text-[11px] text-white/60">
-                    No se encontró nada para "{resultsQuery}". Intenta con otras palabras clave.
-                  </p>
-                </div>
+            {/* Columna Derecha / Split View de Letras (Visible cuando las letras estén activas) */}
+            {isLyricsOpen && (
+              <div className={cn(
+                "min-h-0 flex flex-col transition-all duration-300",
+                isWide ? "flex-1 md:w-[46%] lg:w-[44%] animate-in fade-in slide-in-from-right-4 duration-300" : "flex-1 w-full"
+              )}>
+                <LyricsPanel
+                  currentTrack={playerState?.current ?? null}
+                  lyricsDoc={lyricsDoc}
+                  isLoading={isLyricsLoading}
+                  positionSeconds={playerState?.position_seconds ?? 0}
+                  isPlaying={isPlaying}
+                  speed={playerState?.speed ?? 1.0}
+                  onClose={() => setIsLyricsOpen(false)}
+                  onSeek={handleSeekCommit}
+                  onLyricsUpdated={(updated) => setLyricsDoc(updated)}
+                />
               </div>
             )}
-
-            {/* Pantalla vacía inicial de concentración */}
-            {results.length === 0 && resultsQuery === "" && recentTracksMemo.length === 0 && (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
-                <div className="size-14 rounded-2xl liquid-pill flex items-center justify-center text-teal-300/80 shadow-lg">
-                  <Headphones className="size-7" />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <p className="text-sm font-medium text-white/90">Espacio de concentración</p>
-                  <p className="text-xs text-white/60 max-w-[240px]">
-                    Busca cualquier tema en YouTube o pega un enlace directo y empieza tu sesión.
-                  </p>
-                </div>
-              </div>
-            )}
-          </>
+          </div>
         )}
 
-        {/* Música: dock compacto en Focus y Letras, reproductor completo en Biblioteca */}
+        {/* Música: dock compacto en Focus y Letras (en pantalla compacta), reproductor flotante en Biblioteca o Split View */}
         {isFocusView ? (
           <FocusNowPlayingDock
             playerState={playerState}
@@ -2002,7 +2199,7 @@ function App() {
             onNext={handleNext}
             onOpenLibrary={() => setIsFocusView(false)}
           />
-        ) : isLyricsOpen ? (
+        ) : (isLyricsOpen && !isWide) ? (
           <NowPlayingMiniDock
             playerState={playerState}
             isTrackLoading={isTrackLoading}
@@ -2017,31 +2214,33 @@ function App() {
           />
         ) : (
           (isTrackLoading || playerState?.current) && (
-            <NowPlaying
-              playerState={playerState}
-              isTrackLoading={isTrackLoading}
-              isPlaying={isPlaying}
-              isLooping={isLooping}
-              dragPosition={dragPosition}
-              onTogglePlayback={handleTogglePlayback}
-              onToggleLoop={handleToggleLoop}
-              onStop={handleStop}
-              onNext={handleNext}
-              onPrevious={handlePrevious}
-              onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
-              isQueueOpen={isQueueOpen}
-              queueCount={queue.length}
-              onToggleLyrics={handleToggleLyrics}
-              isLyricsOpen={isLyricsOpen}
-              onSeekPreview={setDragPosition}
-              onSeekCommit={handleSeekCommit}
-              onVolumePreview={handleVolumePreview}
-              onVolumeCommit={handleVolumeCommit}
-              onToggleMute={handleToggleMute}
-              volume={volume}
-              onSelectPreset={handleSelectPreset}
-              onCycleSpeed={handleCycleSpeed}
-            />
+            <div className={cn("w-full transition-all duration-300", isWide && "max-w-2xl mx-auto")}>
+              <NowPlaying
+                playerState={playerState}
+                isTrackLoading={isTrackLoading}
+                isPlaying={isPlaying}
+                isLooping={isLooping}
+                dragPosition={dragPosition}
+                onTogglePlayback={handleTogglePlayback}
+                onToggleLoop={handleToggleLoop}
+                onStop={handleStop}
+                onNext={handleNext}
+                onPrevious={handlePrevious}
+                onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
+                isQueueOpen={isQueueOpen}
+                queueCount={queue.length}
+                onToggleLyrics={handleToggleLyrics}
+                isLyricsOpen={isLyricsOpen}
+                onSeekPreview={setDragPosition}
+                onSeekCommit={handleSeekCommit}
+                onVolumePreview={handleVolumePreview}
+                onVolumeCommit={handleVolumeCommit}
+                onToggleMute={handleToggleMute}
+                volume={volume}
+                onSelectPreset={handleSelectPreset}
+                onCycleSpeed={handleCycleSpeed}
+              />
+            </div>
           )
         )}
       </GlassPanel>
