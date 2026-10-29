@@ -198,8 +198,16 @@ impl LyricsRequest {
         let is_local = path.is_absolute() && path.is_file();
 
         let (title, artist) = match track.artist.as_deref() {
-            Some(artist) if artist != "Archivo Local" => {
-                (clean_title(&track.title, Some(artist)), Some(artist.to_string()))
+            Some(artist)
+                if artist != "Archivo Local"
+                    && !artist.eq_ignore_ascii_case("cadence")
+                    && !artist.to_lowercase().starts_with("cadence") =>
+            {
+                if let Some((a, t)) = track.title.split_once(" - ") {
+                    (clean_title(t, Some(a)), Some(a.trim().to_string()))
+                } else {
+                    (clean_title(&track.title, Some(artist)), Some(artist.to_string()))
+                }
             }
             _ => split_artist_title(&track.title),
         };

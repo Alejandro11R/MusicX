@@ -105,14 +105,50 @@ impl LrclibClient {
         &self,
         request: &LyricsRequest,
     ) -> Result<Option<LyricsDoc>, CadenceError> {
-        let candidates = self.search_tracks(request).await?;
+        let mut candidates = self.search_tracks(request).await?;
+
+        // Fallback 1: si no hubo candidatos y teníamos artista forzado, reintentar con `q` libre
+        if candidates.is_empty() && request.artist.is_some() {
+            let fallback_req = LyricsRequest {
+                track_id: request.track_id.clone(),
+                title: clean_title(&request.title, None),
+                artist: None,
+                album: None,
+                duration_seconds: request.duration_seconds,
+                local_path: request.local_path.clone(),
+                force: request.force,
+            };
+            if let Ok(fallback_candidates) = self.search_tracks(&fallback_req).await {
+                candidates = fallback_candidates;
+            }
+        }
+
+        // Fallback 2: si el título contiene " - ", buscar usando la porción de canción
+        if candidates.is_empty() {
+            if let Some((_, song)) = request.title.split_once(" - ") {
+                let song_cleaned = clean_title(song, None);
+                let fallback_req = LyricsRequest {
+                    track_id: request.track_id.clone(),
+                    title: song_cleaned,
+                    artist: None,
+                    album: None,
+                    duration_seconds: request.duration_seconds,
+                    local_path: request.local_path.clone(),
+                    force: request.force,
+                };
+                if let Ok(fallback_candidates) = self.search_tracks(&fallback_req).await {
+                    candidates = fallback_candidates;
+                }
+            }
+        }
+
         let best = candidates
             .into_iter()
             .map(|candidate| {
                 let score = score(&candidate, request);
                 (score, candidate)
             })
-            .filter(|(score, _)| *score >= 70)
+            .filter(|(score, _)| *score >= 50)
             .max_by_key(|(score, _)| *score)
             .map(|(_, candidate)| candidate);
 

@@ -1386,6 +1386,34 @@ function App() {
     });
   }, [lyricsDoc, playerState?.current]);
 
+  // Auto-cargar letra si el modo inmersivo o el panel de letras se abren sin letra cargada
+  useEffect(() => {
+    if (
+      (isImmersiveOpen || isLyricsOpen) &&
+      playerState?.current &&
+      !lyricsDoc &&
+      !isLyricsLoading
+    ) {
+      const current = playerState.current;
+      setIsLyricsLoading(true);
+      getLyrics({
+        track_id: current.id,
+        title: current.title,
+        artist: current.artist,
+        duration_seconds: current.duration_seconds,
+      })
+        .then((doc) => {
+          setLyricsDoc(doc);
+        })
+        .catch((err) => {
+          console.error("Error al auto-cargar letra:", err);
+        })
+        .finally(() => {
+          setIsLyricsLoading(false);
+        });
+    }
+  }, [isImmersiveOpen, isLyricsOpen, playerState?.current?.id, lyricsDoc, isLyricsLoading]);
+
   const handlePlayQueueIndex = useCallback(async (index: number) => {
     try {
       await playQueueIndex(index);
@@ -2359,6 +2387,7 @@ function App() {
           onToggleMute={handleToggleMute}
           onSelectPreset={handleSelectPreset}
           onClose={() => setIsImmersiveOpen(false)}
+          onLyricsUpdated={(doc) => setLyricsDoc(doc)}
         />
       )}
     </main>

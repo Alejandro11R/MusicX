@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import {
   X,
   Play,
@@ -11,8 +11,21 @@ import {
   Headphones,
   ArrowDown,
   Sparkles,
+  Search,
+  RefreshCw,
+  Music2,
+  Loader2,
 } from "lucide-react";
-import { SearchResult, PlayerState, LyricsDoc, AudioPreset } from "../../lib/tauri";
+import {
+  SearchResult,
+  PlayerState,
+  LyricsDoc,
+  AudioPreset,
+  LyricsCandidate,
+  getLyrics,
+  searchLyrics,
+  getLyricsById,
+} from "../../lib/tauri";
 import { safeDuration, safePosition, formatDuration } from "../../lib/playback";
 import { findActiveLineIndex } from "../../lib/lyrics";
 import { useLyricClock } from "../lyrics/useLyricClock";
@@ -41,13 +54,14 @@ interface ImmersivePlayerProps {
   onToggleMute: () => void;
   onSelectPreset?: (preset: AudioPreset) => void;
   onClose: () => void;
+  onLyricsUpdated?: (doc: LyricsDoc) => void;
 }
 
 export function ImmersivePlayer({
   currentTrack,
   playerState,
   lyricsDoc,
-  isLyricsLoading,
+  isLyricsLoading: externalLoading,
   isPlaying,
   isLooping,
   dragPosition,
@@ -62,11 +76,19 @@ export function ImmersivePlayer({
   onVolumeCommit,
   onToggleMute,
   onClose,
+  onLyricsUpdated,
 }: ImmersivePlayerProps) {
   const palette = useAlbumPalette(currentTrack?.thumbnail_url);
   const viewportRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [showVolumePopup, setShowVolumePopup] = useState(false);
+
+  // Estados para búsqueda y recarga de letras
+  const [internalLoading, setInternalLoading] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [candidates, setCandidates] = useState<LyricsCandidate[]>([]);
 
   const duration = safeDuration(playerState?.duration_seconds ?? 0);
   const rawPosition = dragPosition ?? playerState?.position_seconds ?? 0;
@@ -95,6 +117,93 @@ export function ImmersivePlayer({
     lineRefs,
     enabled: isSynced,
   });
+
+  // Intentar cargar letra automáticamente si no está disponible al abrir
+  useEffect(() => {
+    if (!lyricsDoc && currentTrack && !externalLoading && !internalLoading) {
+      setInternalLoading(true);
+      getLyrics({
+        track_id: currentTrack.id,
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        duration_seconds: currentTrack.duration_seconds,
+      })
+        .then((doc) => {
+          onLyricsUpdated?.(doc);
+        })
+        .catch((err) => {
+          console.error("Error cargando letras en modo inmersivo:", err);
+        })
+        .finally(() => {
+          setInternalLoading(false);
+        });
+    }
+  }, [currentTrack?.id]);
+
+  const handleRefreshLyrics = async () => {
+    if (!currentTrack) return;
+    setInternalLoading(true);
+    try {
+      const doc = await getLyrics({
+        track_id: currentTrack.id,
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        duration_seconds: currentTrack.duration_seconds,
+        force: true,
+      });
+      onLyricsUpdated?.(doc);
+    } catch (err) {
+      console.error("Error recargando letra:", err);
+    } finally {
+      setInternalLoading(false);
+    }
+  };
+
+  const handleOpenSearch = () => {
+    if (currentTrack) {
+      // Limpiar ruido para sugerir una búsqueda efectiva
+      const query = currentTrack.title
+        .replace(/\(cover.*?\)/gi, "")
+        .replace(/\(official.*?\)/gi, "")
+        .replace(/\[.*?\]/g, "")
+        .trim();
+      setSearchQuery(query);
+    }
+    setShowSearchModal(true);
+  };
+
+  const handleSearchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentTrack || !searchQuery.trim()) return;
+
+    setIsSearching(true);
+    try {
+      const results = await searchLyrics({
+        track_id: currentTrack.id,
+        title: searchQuery.trim(),
+        artist: null,
+      });
+      setCandidates(results);
+    } catch (err) {
+      console.error("Error buscando alternativas de letras:", err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSelectCandidate = async (candidate: LyricsCandidate) => {
+    if (!currentTrack) return;
+    setInternalLoading(true);
+    setShowSearchModal(false);
+    try {
+      const doc = await getLyricsById(candidate.id, currentTrack.id);
+      onLyricsUpdated?.(doc);
+    } catch (err) {
+      console.error("Error al cargar letra seleccionada:", err);
+    } finally {
+      setInternalLoading(false);
+    }
+  };
 
   return (
     <div
@@ -136,31 +245,51 @@ export function ImmersivePlayer({
       </div>
 
       {/* Barra superior de controles mínimos */}
-      <header className="relative z-20 flex items-center justify-between p-6 md:p-8">
+      <header className="relative z-20 flex items-center justify-between px-6 py-3.5 sm:px-8">
         <button
           type="button"
           onClick={onClose}
-          className="size-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 backdrop-blur-md text-white/80 hover:text-white flex items-center justify-center transition-all cursor-pointer shadow-lg"
+          className="size-9 sm:size-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 backdrop-blur-md text-white/80 hover:text-white flex items-center justify-center transition-all cursor-pointer shadow-lg"
           title="Salir del modo inmersivo (Esc)"
           aria-label="Cerrar vista inmersiva"
         >
-          <X className="size-5" />
+          <X className="size-4 sm:size-5" />
         </button>
 
-        {isSynced && (
-          <div className="hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 border border-white/15 backdrop-blur-md text-xs font-medium text-white/85 shadow-md">
-            <Sparkles className="size-3.5 text-amber-300" />
-            <span>Letras sincronizadas en vivo</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {isSynced && (
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 border border-white/15 backdrop-blur-md text-xs font-medium text-white/85 shadow-md">
+              <Sparkles className="size-3.5 text-amber-300" />
+              <span>Letras en vivo</span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleOpenSearch}
+            className="size-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 backdrop-blur-md text-white/80 hover:text-white flex items-center justify-center transition-all cursor-pointer shadow-sm"
+            title="Buscar letra alternativa"
+          >
+            <Search className="size-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleRefreshLyrics}
+            className="size-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 backdrop-blur-md text-white/80 hover:text-white flex items-center justify-center transition-all cursor-pointer shadow-sm"
+            title="Recargar letras"
+          >
+            <RefreshCw className={cn("size-3.5", internalLoading && "animate-spin")} />
+          </button>
+        </div>
       </header>
 
       {/* Contenido Central: Simetría 50 / 50 estilo Apple Music */}
-      <main className="relative z-10 flex-1 min-h-0 w-full max-w-7xl mx-auto px-6 md:px-12 grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-14 items-center">
+      <main className="relative z-10 flex-1 min-h-0 w-full max-w-6xl mx-auto px-6 md:px-10 grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-12 items-center justify-center">
         {/* Columna Izquierda: Carátula Héroe + Metadata + Transporte */}
-        <div className="flex flex-col items-center md:items-start max-w-md mx-auto w-full gap-5">
-          {/* Carátula Grande en Alta Definición */}
-          <div className="relative size-60 sm:size-72 md:size-80 lg:size-96 shrink-0 overflow-hidden rounded-2xl border border-white/20 shadow-[0_24px_50px_-12px_rgba(0,0,0,0.95)] transition-all duration-300">
+        <div className="flex flex-col items-center md:items-start justify-center max-w-md mx-auto w-full gap-3 sm:gap-4 my-auto">
+          {/* Carátula Grande en Alta Definición que escala según la altura de pantalla */}
+          <div className="relative size-44 sm:size-56 md:size-64 lg:size-72 max-h-[35vh] max-w-[35vh] shrink-0 overflow-hidden rounded-2xl border border-white/20 shadow-[0_20px_45px_-10px_rgba(0,0,0,0.9)] transition-all duration-300">
             {currentTrack?.thumbnail_url ? (
               <img
                 src={currentTrack.thumbnail_url}
@@ -175,22 +304,22 @@ export function ImmersivePlayer({
           </div>
 
           {/* Metadata de la pista */}
-          <div className="w-full flex flex-col gap-1 text-center md:text-left">
+          <div className="w-full flex flex-col gap-0.5 text-center md:text-left">
             <div className="flex items-center justify-center md:justify-start gap-2">
-              <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight truncate">
+              <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-white tracking-tight truncate">
                 {currentTrack?.title || "Sin reproducción"}
               </h1>
               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white/20 text-white/90 border border-white/20 shrink-0">
                 E
               </span>
             </div>
-            <p className="text-sm sm:text-base font-medium text-white/60 truncate">
+            <p className="text-xs sm:text-sm font-medium text-white/60 truncate">
               {currentTrack?.artist || "Cadence"}
             </p>
           </div>
 
           {/* Barra de progreso estilo Apple Music con tiempo transcurrido y restante (-X:XX) */}
-          <div className="w-full flex flex-col gap-1.5 pt-1">
+          <div className="w-full flex flex-col gap-1 pt-0.5">
             <Slider
               className="w-full cursor-pointer"
               value={[position]}
@@ -201,14 +330,14 @@ export function ImmersivePlayer({
               onValueCommit={([val]) => onSeekCommit(val)}
               aria-label="Progreso de pista"
             />
-            <div className="flex items-center justify-between text-xs tabular-nums text-white/50 font-medium px-0.5">
+            <div className="flex items-center justify-between text-[11px] tabular-nums text-white/50 font-medium px-0.5">
               <span>{formatDuration(position)}</span>
               <span>-{formatDuration(remaining)}</span>
             </div>
           </div>
 
           {/* Botonera de Transporte Centrada y Simétrica */}
-          <div className="w-full flex items-center justify-center md:justify-start gap-5 pt-2">
+          <div className="w-full flex items-center justify-center md:justify-start gap-3 sm:gap-4 pt-1 sm:pt-2">
             <button
               type="button"
               onClick={onToggleLoop}
@@ -236,13 +365,13 @@ export function ImmersivePlayer({
             <button
               type="button"
               onClick={onTogglePlayback}
-              className="size-14 sm:size-16 rounded-full bg-white text-black hover:scale-105 active:scale-95 shadow-[0_12px_32px_rgba(255,255,255,0.3)] transition-all flex items-center justify-center cursor-pointer"
+              className="size-13 sm:size-15 md:size-16 rounded-full bg-white text-black hover:scale-105 active:scale-95 shadow-[0_8px_28px_rgba(255,255,255,0.4)] transition-all flex items-center justify-center cursor-pointer shrink-0 z-20"
               title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
             >
               {isPlaying ? (
-                <Pause className="size-7 fill-black text-black" />
+                <Pause className="size-6 sm:size-7 fill-black text-black" />
               ) : (
-                <Play className="size-7 fill-black text-black ml-1" />
+                <Play className="size-6 sm:size-7 fill-black text-black ml-0.5" />
               )}
             </button>
 
@@ -271,7 +400,7 @@ export function ImmersivePlayer({
               </button>
 
               {showVolumePopup && (
-                <div className="absolute bottom-12 left-1/2 -translate-x-1/2 w-32 p-3 rounded-2xl bg-black/80 border border-white/15 backdrop-blur-xl shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 z-30">
+                <div className="absolute bottom-12 left-1/2 -translate-x-1/2 w-32 p-3 rounded-2xl bg-black/85 border border-white/20 backdrop-blur-xl shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 z-30">
                   <button
                     type="button"
                     onClick={onToggleMute}
@@ -299,7 +428,7 @@ export function ImmersivePlayer({
         </div>
 
         {/* Columna Derecha: Letras Tipográficas a Gran Escala con Desenfoque Cinemático */}
-        <div className="relative h-[60vh] md:h-[75vh] w-full flex flex-col justify-center overflow-hidden">
+        <div className="relative h-[55vh] md:h-[70vh] w-full flex flex-col justify-center overflow-hidden">
           <div
             className="w-full h-full overflow-y-auto overflow-x-hidden pr-2 scroll-smooth"
             ref={viewportRef}
@@ -311,7 +440,7 @@ export function ImmersivePlayer({
             }}
           >
             {lines.length > 0 ? (
-              <div className="flex flex-col gap-6 py-[35vh]">
+              <div className="flex flex-col gap-6 py-[30vh]">
                 {lines.map((line, idx) => {
                   const isPast = isSynced && activeLineIndex > -1 && idx < activeLineIndex;
                   const isActive = isSynced && idx === activeLineIndex;
@@ -344,17 +473,102 @@ export function ImmersivePlayer({
                   );
                 })}
               </div>
-            ) : isLyricsLoading ? (
-              <div className="h-full flex flex-col items-center justify-center gap-3 text-white/50">
-                <div className="size-8 rounded-full border-2 border-white/20 border-t-white animate-spin" />
-                <p className="text-sm font-medium">Buscando letra en tiempo real...</p>
+            ) : externalLoading || internalLoading ? (
+              <div className="h-full flex flex-col items-center justify-center gap-3 text-white/60">
+                <Loader2 className="size-8 text-teal-300 animate-spin" />
+                <p className="text-sm font-medium">Buscando letra sincronizada en vivo...</p>
+              </div>
+            ) : showSearchModal ? (
+              <div className="h-full flex flex-col justify-center max-w-md mx-auto w-full gap-4 p-4 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-white/90">Buscar letra manualmente</h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowSearchModal(false)}
+                    className="p-1 rounded-full text-white/50 hover:text-white cursor-pointer"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleSearchSubmit} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Título de la canción o artista..."
+                    className="flex-1 px-3 py-2 rounded-xl bg-white/10 border border-white/15 text-xs text-white placeholder:text-white/40 focus:outline-hidden focus:border-teal-400"
+                    autoFocus
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSearching}
+                    className="px-3 py-2 rounded-xl bg-teal-400 text-black text-xs font-semibold hover:bg-teal-300 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSearching ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+                    <span>Buscar</span>
+                  </button>
+                </form>
+
+                {candidates.length > 0 ? (
+                  <div className="max-h-60 overflow-y-auto flex flex-col gap-1.5 pr-1">
+                    {candidates.map((cand) => (
+                      <button
+                        key={cand.id}
+                        type="button"
+                        onClick={() => handleSelectCandidate(cand)}
+                        className="flex items-center justify-between p-2 rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-left transition-colors cursor-pointer group"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-medium text-white truncate">{cand.title}</p>
+                          <p className="text-[10px] text-white/50 truncate">{cand.artist} • {cand.album || "Sencillo"}</p>
+                        </div>
+                        {cand.has_synced && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] bg-teal-400/20 text-teal-300 border border-teal-400/30 shrink-0 font-medium">
+                            Sincronizada
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ) : isSearching ? (
+                  <div className="py-6 flex items-center justify-center text-xs text-white/50 gap-2">
+                    <Loader2 className="size-4 animate-spin text-teal-300" />
+                    <span>Consultando biblioteca de letras...</span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-white/40 text-center py-4">
+                    Escribe el nombre de la canción para buscar letras disponibles en LRCLIB.
+                  </p>
+                )}
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center gap-2 text-white/40 text-center">
-                <p className="text-lg font-semibold text-white/70">Letra no disponible</p>
-                <p className="text-xs max-w-xs">
-                  Disfruta de la reproducción inmersiva con el arte del álbum
-                </p>
+              <div className="h-full flex flex-col items-center justify-center gap-3 text-white/40 text-center px-4">
+                <Music2 className="size-10 text-white/30" />
+                <div className="flex flex-col gap-1">
+                  <p className="text-base font-semibold text-white/80">Letra no disponible automáticamente</p>
+                  <p className="text-xs text-white/50 max-w-xs mx-auto">
+                    No se encontró letra exacta con el título de YouTube. Puedes buscarla manualmente o recargar.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenSearch}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 text-xs font-medium text-white transition-all cursor-pointer shadow-md"
+                  >
+                    <Search className="size-3.5 text-teal-300" />
+                    <span>Buscar letra</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRefreshLyrics}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/5 hover:bg-white/15 active:scale-95 border border-white/10 text-xs font-medium text-white/80 hover:text-white transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="size-3.5" />
+                    <span>Reintentar</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -372,8 +586,8 @@ export function ImmersivePlayer({
         </div>
       </main>
 
-      {/* Pie de página sutil */}
-      <footer className="relative z-20 flex items-center justify-between px-6 md:px-8 py-4 text-xs text-white/40">
+      {/* Pie de página sutil con pointer-events-none para nunca tapar clicks */}
+      <footer className="relative z-20 flex items-center justify-between px-6 md:px-8 py-2.5 text-xs text-white/40 pointer-events-none">
         <span className="hidden sm:inline">Presiona [Esc] para salir</span>
         <span className="mx-auto sm:mx-0">Cadence Immersive Audio</span>
       </footer>
