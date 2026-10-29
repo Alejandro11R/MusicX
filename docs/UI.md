@@ -242,3 +242,59 @@ window is hidden or low-power, disabled with `prefers-reduced-motion`.
 - `Esc` leaves Focus Studio; the timer keeps running.
 - `/` or `Ctrl/Cmd+K` returns to the library and focuses search.
 - `Space`, `N`, `P` keep controlling music while the timer runs.
+
+---
+
+## Apple Music Immersive Mode (`ImmersivePlayer.tsx`)
+
+A full-screen cinematic player inspired by Apple Music's lyrics experience, designed for immersive listening sessions without cognitive clutter.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ [× Cerrar]  Cadence · Modo Inmersivo            [🔍 Buscar] [↺ Recargar]│
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                        │
+│       [ Columna 1: Héroe (50%) ]          [ Columna 2: Letras (50%) ]   │
+│                                                                        │
+│          ┌─────────────────┐             ... verso anterior ...       │
+│          │                 │                                           │
+│          │  Carátula 1:1   │             ▶ VERSO ACTIVO EN SPOTLIGHT   │
+│          │  HD Glass Glow  │               (Tipografía grande, blanca, │
+│          │                 │                resaltada a 60 fps)        │
+│          └─────────────────┘                                           │
+│            Título de Canción              ... verso siguiente ...      │
+│            Artista Principal                                           │
+│                                                                        │
+│       01:23 [═════●══════] -02:45                                      │
+│             ⏮  ⏯  ⏭  🔊                                               │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual & Motion Architecture
+
+1. **50 / 50 Symmetrical Split:**
+   - **Left Column:** Responsive square hero artwork scaling cleanly with viewport height (`max-h-[35vh]`), track title with explicit badge (`E`), artist, glass progress bar with dual elapsed / remaining (`-X:XX`) clocks, and centered media controls (Previous, Play/Pause, Next, Volume popover).
+   - **Right Column:** Large typographic synchronized lyrics rendered vertically with top/bottom alpha mask gradients (`mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%)`).
+
+2. **Dynamic Album Palette & Backdrop:**
+   - Real-time extraction of dominant and secondary tones from the track's album cover (`useAlbumPalette`).
+   - Deep atmospheric background combining radial gradient auras with low-cost hardware compositing, avoiding GPU memory spikes.
+
+3. **Typography & Line Focus States:**
+   - **Active Line:** Opacity 1.0, scale 1.04, bright crisp white with soft text shadow glow.
+   - **Inactive Lines:** Opacity 0.35–0.40, soft blur effect (`blur-[0.5px]`), subtle hover interaction allowing the user to click any line to seek directly to that exact timestamp.
+
+4. **Kinetic Auto-Scroll & User Override:**
+   - Smooth programmatic vertical centering on the active line.
+   - User scroll detection: if the listener scrolls up or down to read ahead, auto-scroll pauses cleanly and reveals an elegant floating pill: *"Reanudar sincronización"*.
+
+5. **Graceful Fallback & Manual Search Modal:**
+   - When no automated match is available, the spinner smoothly transitions to a clean fallback screen with **"Buscar letra"** and **"Reintentar"**.
+   - Integrated manual search modal queries LRCLib directly for alternate track titles or album variations with single-click selection.
+
+6. **Keyboard Shortcuts:**
+   - `I` — Toggle Immersive Player.
+   - `L` — Toggle sidebar Lyrics panel.
+   - `Esc` — Close Immersive mode or modals.
+   - `Space`, `N`, `P` — Global media control.

@@ -238,6 +238,22 @@ Cadence runs an asynchronous background `ControlServer` (`services/control_serve
 - **Client Binary (`cadence-cli`):** A lightweight standalone executable that communicates with the active app using line-delimited JSON.
 - **Features:** Allows headless developers to inspect playback, search/play tracks, trigger focus sessions, and switch presets from tmux, Neovim, or custom window manager keybindings.
 
+### Lyrics Engine & Real-Time Synchronization
+
+Cadence integrates a dedicated lyrics engine (`services/lyrics/`) tailored for synchronized LRC playback:
+
+- **Decoupled Architecture:**
+  - Rust downloads, parses, and caches lyrics documents (`LyricsDoc`).
+  - React runs the 60 fps clock via `requestAnimationFrame` interpolating position from 2 Hz `mpv` events without IPC saturation.
+- **Data Providers & Matching Heuristics:**
+  - **Local LRC Files:** Auto-detected adjacent to local music files (`.lrc`).
+  - **LRCLib API:** Multi-strategy search. If the artist is a placeholder (`"Cadence"` or `"Archivo Local"` from YouTube), queries are executed as freeform `q` searches. Candidate scoring grants bonus points (`+40`) when candidate artists are found inside YouTube track titles.
+- **Three-Tier Caching & Negative Cache:**
+  - In-memory LRU cache (`64` documents).
+  - Persistent disk cache (`~/.cache/cadence/lyrics/`) with a 30-day TTL.
+  - Negative caching (24 hours) for missing lyrics to avoid hammering upstream APIs.
+  - In-flight request deduplication (`OnceCell`) preventing thundering herds.
+
 ## Organization
 
 ```
@@ -245,23 +261,30 @@ src-tauri/src/
 ├── bin/
 │   ├── main.rs       — Desktop GUI entrypoint
 │   └── cli.rs        — Standalone Cadence CLI client (cadence-cli)
-├── commands/         Tauri-facing adapters (playback.rs, search.rs). Thin delegation.
+├── commands/         Tauri-facing adapters (playback.rs, search.rs, lyrics.rs).
 ├── services/         All business logic:
 │   ├── orchestrator.rs   — PlayerOrchestrator, queue management, auto-advance, presets
 │   ├── mpv_event.rs      — Cross-platform MpvEventService, IPC event loop, property observers
 │   ├── yt_dlp.rs         — Direct URL extraction, search, TTL audio cache, circuit breaker
 │   ├── focus.rs          — FocusEngine (Pomodoro timer, phase transitions, auto-pause)
-│   └── control_server.rs — Cross-platform IPC server for CLI client communication
+│   ├── control_server.rs — Cross-platform IPC server for CLI client communication
+│   └── lyrics/           — LyricsService, LRCLib client, parser, cache, fuzzy heuristics
 ├── models/           Plain structs/enums shared between backend and frontend
-│                     (SearchResult, PlayerState, PlaybackStatus, QueueItem, FocusState).
+│                     (SearchResult, PlayerState, PlaybackStatus, QueueItem, FocusState, LyricsDoc).
 └── errors.rs         CadenceError — every external-process interaction returns Result<T, CadenceError>.
 
 src/
 ├── lib/
 │   ├── tauri.ts      Thin invoke() wrappers + TS mirrors of Rust models/events.
 │   ├── playback.ts   Pure helper functions for durations, clamping, and seeking.
-│   └── album-color.ts Canvas-based dominant color extraction for ambient glow.
-└── App.tsx           Liquid Glass UI (SearchBar, FocusWidget, QueuePanel, NowPlaying, Audio FX).
+│   ├── album-color.ts Canvas-based dominant and dual palette extraction for ambient backdrop.
+│   ├── lyrics.ts     Binary search line finder and LRC utilities.
+│   └── useLyrics.ts  Hooks for 60 fps lyric clock interpolation and smooth kinetic scrolling.
+├── components/
+│   ├── focus/        FocusStudio, FocusRing, FocusAura, FocusPresets.
+│   ├── player/       ImmersivePlayer (Apple Music style), lyrics modal, fallback search.
+│   └── ui/           Reusable Glass components (Slider, Popover, Tooltip, Dialog).
+└── App.tsx           Liquid Glass UI root orchestrator.
 ```
 
 ## Adding a new capability
