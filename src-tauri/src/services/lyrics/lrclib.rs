@@ -47,9 +47,9 @@ impl LrclibClient {
     pub fn new() -> Self {
         let http = Client::builder()
             .user_agent(concat!(
-                "Cadence/",
+                "Cadence v",
                 env!("CARGO_PKG_VERSION"),
-                " (+https://github.com/xalejo/cadence)"
+                " (https://github.com/Alejandro11R/MusicX)"
             ))
             .timeout(REQUEST_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
@@ -291,14 +291,16 @@ impl LrclibClient {
                 message: format!("lrclib request: {error}"),
             })?;
 
-        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        if response.status() == StatusCode::TOO_MANY_REQUESTS
+            || response.status() == StatusCode::SERVICE_UNAVAILABLE
+        {
             let retry_after = response
                 .headers()
                 .get("retry-after")
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(2)
-                .min(5);
+                .unwrap_or(1)
+                .min(3);
             tokio::time::sleep(Duration::from_secs(retry_after)).await;
             return self
                 .http
@@ -384,6 +386,15 @@ fn score(candidate: &LrclibTrack, request: &LyricsRequest) -> i32 {
         }
     } else if raw_title.contains(&candidate_artist) {
         score += 40;
+    } else {
+        let any_artist_matched = candidate_artist
+            .split(|c| c == ',' || c == '/' || c == '&' || c == '•' || c == ';')
+            .map(|s| s.trim())
+            .filter(|s| s.len() >= 3)
+            .any(|s| raw_title.contains(s));
+        if any_artist_matched {
+            score += 35;
+        }
     }
 
     if candidate.synced_lyrics.is_some() {

@@ -1428,6 +1428,15 @@ function App() {
     }
   }, [isImmersiveOpen, isLyricsOpen, playerState?.current?.id, lyricsDoc]);
 
+  // Safety timeout: si la carga de letras tarda más de 7 segundos, desactivar el spinner automáticamente
+  useEffect(() => {
+    if (!isLyricsLoading) return;
+    const timer = setTimeout(() => {
+      setIsLyricsLoading(false);
+    }, 7000);
+    return () => clearTimeout(timer);
+  }, [isLyricsLoading]);
+
   const handlePlayQueueIndex = useCallback(async (index: number) => {
     try {
       await playQueueIndex(index);
@@ -2401,7 +2410,10 @@ function App() {
           onToggleMute={handleToggleMute}
           onSelectPreset={handleSelectPreset}
           onClose={() => setIsImmersiveOpen(false)}
-          onLyricsUpdated={(doc) => setLyricsDoc(doc)}
+          onLyricsUpdated={(doc) => {
+            setLyricsDoc(doc);
+            setIsLyricsLoading(false);
+          }}
         />
       )}
     </main>

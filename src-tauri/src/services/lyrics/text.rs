@@ -12,8 +12,9 @@ pub fn normalize(raw: &str) -> String {
 /// Solo elimina grupos entre paréntesis cuyo contenido sea ruido conocido.
 pub fn clean_title(raw: &str, artist: Option<&str>) -> String {
     const NOISE: &[&str] = &[
-        "official", "video", "audio", "lyric", "lyrics", "visualizer", "hd", "hq", "4k",
-        "remaster", "remastered", "m/v", "mv", "explicit", "clean", "topic",
+        "official", "oficial", "video", "videoclip", "audio", "lyric", "lyrics", "letra", "letras",
+        "visualizer", "hd", "hq", "4k", "remaster", "remastered", "m/v", "mv", "explicit",
+        "clean", "topic", "en vivo", "live",
     ];
 
     let mut output = String::with_capacity(raw.len());
