@@ -613,7 +613,11 @@ const NowPlaying = React.memo(function NowPlaying({
 }: NowPlayingProps) {
   const [showAudioFx, setShowAudioFx] = useState(false);
   const current = playerState?.current;
-  const duration = safeDuration(playerState?.duration_seconds ?? 0);
+  const duration = safeDuration(
+    playerState?.duration_seconds && playerState.duration_seconds > 0
+      ? playerState.duration_seconds
+      : current?.duration_seconds ?? 0
+  );
   const position = safePosition(
     dragPosition ?? playerState?.position_seconds ?? 0,
     duration,
@@ -966,7 +970,11 @@ const NowPlayingMiniDock = React.memo(function NowPlayingMiniDock({
   onOpenImmersive,
 }: NowPlayingMiniDockProps) {
   const current = playerState?.current;
-  const duration = safeDuration(playerState?.duration_seconds ?? 0);
+  const duration = safeDuration(
+    playerState?.duration_seconds && playerState.duration_seconds > 0
+      ? playerState.duration_seconds
+      : current?.duration_seconds ?? 0
+  );
   const position = safePosition(
     dragPosition ?? playerState?.position_seconds ?? 0,
     duration,
@@ -1564,6 +1572,12 @@ function App() {
 
   useEffect(() => {
     function handleGlobalKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const isEditableTarget =
+        target &&
+        (target.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
       const isSearchFocused = document.activeElement === searchInputRef.current;
 
       // Al buscar desde Focus, volvemos a la biblioteca sin tocar el temporizador.
@@ -1591,6 +1605,12 @@ function App() {
           setIsFocusView(false);
           return;
         }
+      }
+
+      // Si el foco está en un elemento editable (como el buscador de letras o cualquier input),
+      // no interceptar teclas de escritura (Espacio, N, P, Q, I, F, M, L, etc.)
+      if (isEditableTarget) {
+        return;
       } else if (!isSearchFocused && e.shiftKey && (e.key === "F" || e.key === "f")) {
         e.preventDefault();
         setIsFocusView((prev) => !prev);

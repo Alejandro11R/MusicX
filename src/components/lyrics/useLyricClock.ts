@@ -18,12 +18,14 @@ export function useLyricClock({ isPlaying, basePosition, speed = 1.0 }: LyricClo
   const [position, setPosition] = useState(basePosition);
   const basePosRef = useRef(basePosition);
   const baseTimeRef = useRef(performance.now());
+  const lastPosRef = useRef(basePosition);
   const rafIdRef = useRef<number | null>(null);
 
   // Cada vez que llega una posición base desde el backend, sincronizamos el ancla
   useEffect(() => {
     basePosRef.current = basePosition;
     baseTimeRef.current = performance.now();
+    lastPosRef.current = basePosition;
     setPosition(basePosition);
   }, [basePosition]);
 
@@ -52,7 +54,13 @@ export function useLyricClock({ isPlaying, basePosition, speed = 1.0 }: LyricClo
       if (isDocumentVisible) {
         const now = performance.now();
         const elapsedSecs = ((now - baseTimeRef.current) / 1000) * speed;
-        setPosition(basePosRef.current + elapsedSecs);
+        const currentPos = basePosRef.current + elapsedSecs;
+
+        // Throttling adaptativo a 10 Hz (100ms): precisión total sin sobrecargar React con 60 re-renders/s
+        if (Math.abs(currentPos - lastPosRef.current) >= 0.1) {
+          lastPosRef.current = currentPos;
+          setPosition(currentPos);
+        }
       }
       rafIdRef.current = requestAnimationFrame(tick);
     };

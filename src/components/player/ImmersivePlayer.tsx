@@ -90,7 +90,11 @@ export function ImmersivePlayer({
   const [isSearching, setIsSearching] = useState(false);
   const [candidates, setCandidates] = useState<LyricsCandidate[]>([]);
 
-  const duration = safeDuration(playerState?.duration_seconds ?? 0);
+  const duration = safeDuration(
+    playerState?.duration_seconds && playerState.duration_seconds > 0
+      ? playerState.duration_seconds
+      : currentTrack?.duration_seconds ?? 0
+  );
   const rawPosition = dragPosition ?? playerState?.position_seconds ?? 0;
   const position = safePosition(rawPosition, duration);
   const remaining = Math.max(0, duration - position);
@@ -456,8 +460,53 @@ export function ImmersivePlayer({
                 <Loader2 className="size-8 text-teal-300 animate-spin" />
                 <p className="text-sm font-medium">Buscando letra sincronizada en vivo...</p>
               </div>
-            ) : showSearchModal ? (
-              <div className="h-full flex flex-col justify-center max-w-md mx-auto w-full gap-4 p-4 animate-in fade-in duration-200">
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center gap-3 text-white/40 text-center px-4">
+                <Music2 className="size-10 text-white/30" />
+                <div className="flex flex-col gap-1">
+                  <p className="text-base font-semibold text-white/80">Letra no disponible automáticamente</p>
+                  <p className="text-xs text-white/50 max-w-xs mx-auto">
+                    No se encontró letra exacta con el título de YouTube. Puedes buscarla manualmente o recargar.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenSearch}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 text-xs font-medium text-white transition-all cursor-pointer shadow-md"
+                  >
+                    <Search className="size-3.5 text-teal-300" />
+                    <span>Buscar letra</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRefreshLyrics}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/5 hover:bg-white/15 active:scale-95 border border-white/10 text-xs font-medium text-white/80 hover:text-white transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="size-3.5" />
+                    <span>Reintentar</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Modal de Búsqueda Manual de Letras (Overlay centrado y accesible) */}
+          {showSearchModal && (
+            <div
+              className="absolute inset-0 z-40 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-in fade-in duration-150"
+              onClick={() => setShowSearchModal(false)}
+            >
+              <div
+                className="w-full max-w-md rounded-2xl bg-neutral-900/95 border border-white/20 p-5 shadow-2xl flex flex-col gap-4 text-white animate-in zoom-in-95 duration-150"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    setShowSearchModal(false);
+                  }
+                }}
+              >
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-white/90">Buscar letra manualmente</h3>
                   <button
@@ -520,36 +569,8 @@ export function ImmersivePlayer({
                   </p>
                 )}
               </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center gap-3 text-white/40 text-center px-4">
-                <Music2 className="size-10 text-white/30" />
-                <div className="flex flex-col gap-1">
-                  <p className="text-base font-semibold text-white/80">Letra no disponible automáticamente</p>
-                  <p className="text-xs text-white/50 max-w-xs mx-auto">
-                    No se encontró letra exacta con el título de YouTube. Puedes buscarla manualmente o recargar.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleOpenSearch}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 text-xs font-medium text-white transition-all cursor-pointer shadow-md"
-                  >
-                    <Search className="size-3.5 text-teal-300" />
-                    <span>Buscar letra</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleRefreshLyrics}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/5 hover:bg-white/15 active:scale-95 border border-white/10 text-xs font-medium text-white/80 hover:text-white transition-all cursor-pointer"
-                  >
-                    <RefreshCw className="size-3.5" />
-                    <span>Reintentar</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Botón flotante para reanudar el auto-scroll */}
           {isSynced && isUserScrolling && activeLineIndex >= 0 && (
