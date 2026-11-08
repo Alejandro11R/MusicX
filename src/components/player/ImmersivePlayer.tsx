@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Music2,
   Loader2,
+  Share2,
 } from "lucide-react";
 import {
   SearchResult,
@@ -32,6 +33,8 @@ import { useLyricClock } from "../lyrics/useLyricClock";
 import { useLyricsScroll } from "../lyrics/useLyricsScroll";
 import { useAlbumPalette } from "../../lib/palette";
 import { Slider } from "../ui/slider";
+import { InteractiveTimeline } from "../ui/InteractiveTimeline";
+import { LyricCardModal } from "../lyrics/LyricCardModal";
 import { cn } from "../../lib/utils";
 
 interface ImmersivePlayerProps {
@@ -89,6 +92,7 @@ export function ImmersivePlayer({
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [candidates, setCandidates] = useState<LyricsCandidate[]>([]);
+  const [showLyricCardModal, setShowLyricCardModal] = useState(false);
 
   const duration = safeDuration(
     playerState?.duration_seconds && playerState.duration_seconds > 0
@@ -263,6 +267,17 @@ export function ImmersivePlayer({
           >
             <RefreshCw className={cn("size-3.5", internalLoading && "animate-spin")} />
           </button>
+
+          {lines.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowLyricCardModal(true)}
+              className="size-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 backdrop-blur-md text-white/80 hover:text-teal-300 flex items-center justify-center transition-all cursor-pointer shadow-sm"
+              title="Generar Lyric Card estética para compartir"
+            >
+              <Share2 className="size-3.5" />
+            </button>
+          )}
         </div>
       </header>
 
@@ -300,17 +315,14 @@ export function ImmersivePlayer({
             </p>
           </div>
 
-          {/* Barra de progreso estilo Apple Music con tiempo transcurrido y restante (-X:XX) */}
-          <div className="w-full flex flex-col gap-1 pt-0.5">
-            <Slider
-              className="w-full cursor-pointer"
-              value={[position]}
-              max={Math.max(duration, 1)}
-              step={1}
-              variant="glass"
-              onValueChange={([val]) => onSeekPreview(val)}
-              onValueCommit={([val]) => onSeekCommit(val)}
-              aria-label="Progreso de pista"
+          {/* Barra de progreso interactiva con hover preview de timestamp y tiempo restante */}
+          <div className="w-full flex flex-col gap-0.5 pt-0.5">
+            <InteractiveTimeline
+              position={position}
+              duration={duration}
+              onSeekPreview={onSeekPreview}
+              onSeekCommit={onSeekCommit}
+              showLabels={false}
             />
             <div className="flex items-center justify-between text-[11px] tabular-nums text-white/50 font-medium px-0.5">
               <span>{formatDuration(position)}</span>
@@ -571,6 +583,16 @@ export function ImmersivePlayer({
               </div>
             </div>
           )}
+
+          {/* Modal de Creación de Lyric Card para compartir */}
+          <LyricCardModal
+            isOpen={showLyricCardModal}
+            onClose={() => setShowLyricCardModal(false)}
+            track={currentTrack}
+            lines={lines}
+            activeLineIndex={activeLineIndex}
+            palette={palette}
+          />
 
           {/* Botón flotante para reanudar el auto-scroll */}
           {isSynced && isUserScrolling && activeLineIndex >= 0 && (

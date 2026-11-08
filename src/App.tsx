@@ -16,6 +16,7 @@ import {
   Maximize2,
   Mic2,
   Minus,
+  Music2,
   Pause,
   Play,
   Plus,
@@ -42,6 +43,10 @@ import {
 } from "@/components/focus/FocusStudio";
 import { LyricsPanel } from "@/components/lyrics/LyricsPanel";
 import { ImmersivePlayer } from "@/components/player/ImmersivePlayer";
+import { CommandPalette } from "@/components/ui/CommandPalette";
+import { CadenceIsland } from "@/components/player/CadenceIsland";
+import { ToastNotification, type ToastMessage } from "@/components/ui/ToastNotification";
+import { InteractiveTimeline } from "@/components/ui/InteractiveTimeline";
 import { cn } from "@/lib/utils";
 import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
 import { extractDominantColor } from "@/lib/album-color";
@@ -870,25 +875,14 @@ const NowPlaying = React.memo(function NowPlaying({
             </div>
           </div>
 
-          {/* Fila 2: Barra de Progreso Fina e Integrada */}
-          <div className="flex items-center gap-2 px-1 pt-0.5">
-            <span className="w-7 shrink-0 text-right text-[10px] tabular-nums text-white/50">
-              {formatDuration(position)}
-            </span>
-            <Slider
-              className="flex-1 cursor-pointer"
-              value={[position]}
-              max={Math.max(duration, 1)}
-              step={1}
-              variant="glass"
-              onValueChange={([value]) => onSeekPreview(value)}
-              onValueCommit={([value]) => onSeekCommit(value)}
-              aria-label="Posición de reproducción"
-              aria-valuetext={`${formatDuration(position)} de ${formatDuration(duration)}`}
+          {/* Fila 2: Barra de Progreso Fina e Integrada con Hover Preview */}
+          <div className="px-1 pt-0.5">
+            <InteractiveTimeline
+              position={position}
+              duration={duration}
+              onSeekPreview={onSeekPreview}
+              onSeekCommit={onSeekCommit}
             />
-            <span className="w-7 shrink-0 text-[10px] tabular-nums text-white/50">
-              {formatDuration(duration)}
-            </span>
           </div>
         </>
       )}
@@ -1154,6 +1148,10 @@ function App() {
     typeof window !== "undefined" ? window.innerWidth >= 768 : false
   );
   const [isMaximized, setIsMaximized] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isIslandOpen, setIsIslandOpen] = useState(false);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const playerStateRef = useRef<PlayerState | null>(null);
   const prevVolumeRef = useRef<number>(100);
@@ -1161,6 +1159,32 @@ function App() {
   const unlistenRef = useRef<(() => void) | null>(null);
   const seekGuardRef = useRef<{ target: number; at: number } | null>(null);
   const lyricsAttemptedTrackIdRef = useRef<string | null>(null);
+
+  // Desvanecimiento automático del Toast
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => {
+      setToast(null);
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  // Seguimiento suave del cursor para brillo especular Liquid Glass 2.0
+  useEffect(() => {
+    let rafId: number | null = null;
+    const handlePointerMove = (e: MouseEvent) => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        document.documentElement.style.setProperty("--pointer-x", `${e.clientX}px`);
+        document.documentElement.style.setProperty("--pointer-y", `${e.clientY}px`);
+      });
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener("pointermove", handlePointerMove);
+    };
+  }, []);
 
   useEffect(() => {
     const handleResize = () => {
@@ -1361,6 +1385,21 @@ function App() {
     e.stopPropagation();
     try {
       await addToQueue(track);
+      setToast({
+        id: Math.random().toString(),
+        text: `Añadida a la cola: ${track.title}`,
+        onUndo: async () => {
+          try {
+            const currentQueue = await getQueue();
+            const last = currentQueue[currentQueue.length - 1];
+            if (last) {
+              await removeFromQueue(last.id);
+            }
+          } catch (err) {
+            console.error("Error al deshacer:", err);
+          }
+        },
+      });
     } catch (err) {
       setError(String(err));
     }
@@ -1370,6 +1409,10 @@ function App() {
     e.stopPropagation();
     try {
       await removeFromQueue(itemId);
+      setToast({
+        id: Math.random().toString(),
+        text: "Pista retirada de la cola",
+      });
     } catch (err) {
       setError(String(err));
     }
@@ -1601,6 +1644,16 @@ function App() {
       };
 
       if (e.key === "Escape") {
+        if (isCommandPaletteOpen) {
+          e.preventDefault();
+          setIsCommandPaletteOpen(false);
+          return;
+        }
+        if (isIslandOpen) {
+          e.preventDefault();
+          setIsIslandOpen(false);
+          return;
+        }
         if (isImmersiveOpen) {
           e.preventDefault();
           setIsImmersiveOpen(false);
@@ -1618,10 +1671,20 @@ function App() {
         }
       }
 
+      // Si el usuario presiona Cmd+K o Ctrl+K, abrir la Command Palette inteligente
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+        return;
+      }
+
       // Si el foco está en un elemento editable (como el buscador de letras o cualquier input),
       // no interceptar teclas de escritura (Espacio, N, P, Q, I, F, M, L, etc.)
       if (isEditableTarget) {
         return;
+      } else if (!isSearchFocused && e.shiftKey && (e.key === "I" || e.key === "i")) {
+        e.preventDefault();
+        setIsIslandOpen((prev) => !prev);
       } else if (!isSearchFocused && e.shiftKey && (e.key === "F" || e.key === "f")) {
         e.preventDefault();
         setIsFocusView((prev) => !prev);
@@ -1631,9 +1694,6 @@ function App() {
       } else if (e.key === "/" && !isSearchFocused) {
         e.preventDefault();
         focusSearch();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        focusSearch(true);
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "q") {
         e.preventDefault();
         quit();
@@ -1680,6 +1740,8 @@ function App() {
     isFocusView,
     isLyricsOpen,
     isImmersiveOpen,
+    isCommandPaletteOpen,
+    isIslandOpen,
     handleNext,
     handlePauseFocus,
     handlePrevious,
@@ -2025,6 +2087,33 @@ function App() {
                 Loop
               </span>
             )}
+
+            {/* Acceso rápido a Command Palette y Cadence Island */}
+            <button
+              type="button"
+              onClick={() => setIsCommandPaletteOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 active:scale-95 border border-white/10 text-[11px] font-medium text-white/70 hover:text-white transition-all cursor-pointer"
+              title="Abrir Command Center (Cmd+K / Ctrl+K)"
+            >
+              <Sparkles className="size-3 text-teal-300" />
+              <span className="hidden sm:inline">Comandos</span>
+              <kbd className="text-[9px] font-mono opacity-50 border border-white/20 rounded px-1">⌘K</kbd>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsIslandOpen((prev) => !prev)}
+              className={cn(
+                "hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all cursor-pointer active:scale-95",
+                isIslandOpen
+                  ? "bg-teal-500/20 border-teal-400/40 text-teal-200"
+                  : "bg-white/5 hover:bg-white/10 border-white/10 text-white/70 hover:text-white"
+              )}
+              title="Alternar Cadence Island (Shift+I)"
+            >
+              <Music2 className="size-3" />
+              <span>Island</span>
+            </button>
           </div>
 
           <FocusWidget
@@ -2448,6 +2537,43 @@ function App() {
           }}
         />
       )}
+
+      {/* Centro de Comandos y Atajos Spotlight */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onSearch={runSearch}
+        onPlayTrack={handlePlay}
+        onTogglePlayback={handleTogglePlayback}
+        onNext={handleNext}
+        onPrevious={handlePrevious}
+        onToggleMute={handleToggleMute}
+        onToggleLoop={handleToggleLoop}
+        onSetVolume={handleVolumeCommit}
+        onSelectPreset={handleSelectPreset}
+        onToggleFocus={() => setIsFocusView((prev) => !prev)}
+        onToggleImmersive={() => setIsImmersiveOpen((prev) => !prev)}
+        onToggleQueue={() => setIsQueueOpen((prev) => !prev)}
+        recentTracks={recentTracks}
+        playerState={playerState}
+      />
+
+      {/* Cadence Island Flotante */}
+      <CadenceIsland
+        isOpen={isIslandOpen}
+        onClose={() => setIsIslandOpen(false)}
+        playerState={playerState}
+        lyricsDoc={lyricsDoc}
+        onTogglePlayback={handleTogglePlayback}
+        onNext={handleNext}
+        onExpand={() => {
+          setIsIslandOpen(false);
+          setIsImmersiveOpen(true);
+        }}
+      />
+
+      {/* Notificación Toast con Deshacer */}
+      <ToastNotification toast={toast} onClose={() => setToast(null)} />
     </main>
   );
 }

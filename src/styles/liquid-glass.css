@@ -39,6 +39,22 @@
     box-shadow: var(--glass-shadow), var(--glass-inset);
   }
 
+  /* Brillo especular dinámico reactivo al cursor (Liquid Glass 2.0) */
+  .glass-panel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(
+      500px circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+      rgba(255, 255, 255, 0.06),
+      transparent 60%
+    );
+    opacity: 0.8;
+    transition: opacity 0.3s ease;
+  }
+
   /* Brillo especular en el borde superior (vidrio real) */
   .glass-panel::before {
     content: "";
