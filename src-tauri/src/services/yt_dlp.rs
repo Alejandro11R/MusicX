@@ -283,15 +283,16 @@ impl YtDlpService {
 
     /// Resuelve un video ID a URL de audio directa.
     pub async fn resolve_audio(&self, video_id: &str) -> Result<String, CadenceError> {
-        // Check cache first
-        if let Some(entry) = self.cache.get(video_id) {
-            if entry.is_valid() {
-                tracing::debug!(video_id = %video_id, "Audio URL cache hit");
-                return Ok(entry.url.clone());
-            } else {
-                // Expired, remove
-                self.cache.remove(video_id);
-            }
+        // Check cache first (liberar guard inmediatamente para evitar deadlock en el shard de DashMap)
+        let cached_url = self
+            .cache
+            .get(video_id)
+            .filter(|entry| entry.is_valid())
+            .map(|entry| entry.url.clone());
+
+        if let Some(url) = cached_url {
+            tracing::debug!(video_id = %video_id, "Audio URL cache hit");
+            return Ok(url);
         }
 
         let _permit = self.semaphore.acquire().await.map_err(|_| CadenceError::YtDlpExecution {

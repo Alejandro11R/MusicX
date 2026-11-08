@@ -1232,10 +1232,19 @@ function App() {
       })
       .catch((err) => console.error("health() check failed:", err));
 
+    let isMounted = true;
+
     // Suscribirse a eventos del orquestador
-    listenOrchestratorEvents(handleOrchestratorEvent).then((unlisten) => {
-      unlistenRef.current = unlisten;
-    });
+    const unlistenOrchPromise = listenOrchestratorEvents(handleOrchestratorEvent);
+    unlistenOrchPromise
+      .then((unlisten) => {
+        if (!isMounted) {
+          unlisten();
+        } else {
+          unlistenRef.current = unlisten;
+        }
+      })
+      .catch(console.error);
 
     // Suscribirse a eventos Tauri (para que el backend emita)
     subscribeEvents().catch((err) => console.error("subscribeEvents failed:", err));
@@ -1262,10 +1271,12 @@ function App() {
     const interval = setInterval(poll, POLL_INTERVAL_MS);
 
     return () => {
+      isMounted = false;
       clearInterval(interval);
       unlistenRef.current?.();
-      unlistenFocusPromise.then((unlisten) => unlisten()).catch(console.error);
-      unlistenLyricsPromise.then((unlisten) => unlisten()).catch(console.error);
+      unlistenOrchPromise.then((unlisten) => unlisten()).catch(() => {});
+      unlistenFocusPromise.then((unlisten) => unlisten()).catch(() => {});
+      unlistenLyricsPromise.then((unlisten) => unlisten()).catch(() => {});
     };
   }, []);
 
@@ -1764,8 +1775,8 @@ function App() {
 
   // Soporte Drag & Drop para reproducir canciones locales instantáneamente
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    getCurrentWindow()
+    let isMounted = true;
+    const unlistenPromise = getCurrentWindow()
       .onDragDropEvent((event) => {
         if (event.payload.type === "over") {
           setIsDragOver(true);
@@ -1808,16 +1819,17 @@ function App() {
         } else {
           setIsDragOver(false);
         }
-      })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => {
-        console.warn("DragDropEvent no soportado o falló:", err);
       });
 
+    unlistenPromise.then((unlisten) => {
+      if (!isMounted) unlisten();
+    }).catch((err) => {
+      console.warn("DragDropEvent no soportado o falló:", err);
+    });
+
     return () => {
-      unlisten?.();
+      isMounted = false;
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
     };
   }, [handlePlay]);
 
