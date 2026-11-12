@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{broadcast, watch, RwLock};
+use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use tokio::time::sleep;
 
 use crate::errors::CadenceError;
@@ -84,14 +84,33 @@ impl PlaybackController {
 #[derive(Clone)]
 pub struct TrackResolver {
     yt_dlp: Arc<YtDlpService>,
+    #[cfg(test)]
+    gate: Option<Arc<ResolutionGate>>,
+}
+
+#[cfg(test)]
+struct ResolutionGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
 }
 
 impl TrackResolver {
     pub fn new(yt_dlp: Arc<YtDlpService>) -> Self {
-        Self { yt_dlp }
+        Self {
+            yt_dlp,
+            #[cfg(test)]
+            gate: None,
+        }
     }
 
     pub async fn resolve_audio(&self, video_id: &str) -> Result<String, CadenceError> {
+        #[cfg(test)]
+        if video_id == "local:/blocked.wav" {
+            if let Some(gate) = &self.gate {
+                gate.entered.notify_one();
+                gate.release.acquire().await.expect("gate open").forget();
+            }
+        }
         if video_id.starts_with("local:") {
             let path = video_id.trim_start_matches("local:");
             return Ok(path.to_string());
@@ -140,10 +159,14 @@ pub struct QueueItem {
 #[serde(tag = "type", content = "data")]
 pub enum OrchestratorEvent {
     TrackStarted(SearchResult),
-    TrackEnded { reason: String },
+    TrackEnded {
+        reason: String,
+    },
     PlaybackError(String),
     StateChanged(PlayerMode),
-    ConnectionChanged { connected: bool },
+    ConnectionChanged {
+        connected: bool,
+    },
     QueueUpdated(Vec<QueueItem>),
     AudioPresetChanged(crate::models::player_state::AudioPreset),
     SpeedChanged(f64),
@@ -191,6 +214,13 @@ pub struct PlayerOrchestrator {
     events_subscribed: AtomicBool,
     queue: RwLock<Vec<QueueItem>>,
     current_queue_index: RwLock<Option<usize>>,
+    /// Navigation follows the latest selected entry while its URL resolves.
+    pending_queue_entry: RwLock<Option<(u64, String)>>,
+    /// A removed active entry leaves a gap immediately before its successor.
+    queue_gap: AtomicBool,
+    intent: AtomicU64,
+    loaded_intent: AtomicU64,
+    effects: Mutex<()>,
     queue_id_counter: AtomicU64,
     desired_audio_preset: RwLock<crate::models::player_state::AudioPreset>,
     desired_speed: AtomicU64,
@@ -230,6 +260,11 @@ impl PlayerOrchestrator {
             events_subscribed: AtomicBool::new(false),
             queue: RwLock::new(Vec::new()),
             current_queue_index: RwLock::new(None),
+            pending_queue_entry: RwLock::new(None),
+            queue_gap: AtomicBool::new(false),
+            intent: AtomicU64::new(0),
+            loaded_intent: AtomicU64::new(0),
+            effects: Mutex::new(()),
             queue_id_counter: AtomicU64::new(1),
             desired_audio_preset: RwLock::new(crate::models::player_state::AudioPreset::Normal),
             desired_speed: AtomicU64::new(1.0f64.to_bits()),
@@ -312,15 +347,15 @@ impl PlayerOrchestrator {
                 self.handle_end_file(reason, error).await;
             }
             Disconnected => {
-                let _ = self.event_tx.send(OrchestratorEvent::ConnectionChanged {
-                    connected: false,
-                });
+                let _ = self
+                    .event_tx
+                    .send(OrchestratorEvent::ConnectionChanged { connected: false });
                 tracing::warn!("mpv disconnected");
             }
             Reconnected => {
-                let _ = self.event_tx.send(OrchestratorEvent::ConnectionChanged {
-                    connected: true,
-                });
+                let _ = self
+                    .event_tx
+                    .send(OrchestratorEvent::ConnectionChanged { connected: true });
                 tracing::info!("mpv reconnected; restoring playback state");
                 let this = self.clone();
                 tokio::spawn(async move {
@@ -339,6 +374,10 @@ impl PlayerOrchestrator {
             return;
         }
 
+        let intent = self.intent.load(Ordering::SeqCst);
+        if self.loaded_intent.load(Ordering::SeqCst) != intent {
+            return;
+        }
         let failed = reason == "error" || error.is_some();
         let track = self.current_track.read().await.clone();
 
@@ -346,27 +385,31 @@ impl PlayerOrchestrator {
             tracing::warn!(reason = %reason, error = ?error, "mpv failed to play current track");
             if let Some(track) = track {
                 let position = load_f64(&self.last_position);
-                self.recover_track(track, position).await;
+                self.recover_track(track, position, intent).await;
                 return;
             }
         }
 
         tracing::info!(reason = %reason, "Track ended");
         if track.is_some() {
-            let _ = self
-                .event_tx
-                .send(OrchestratorEvent::TrackEnded { reason: reason.clone() });
+            let _ = self.event_tx.send(OrchestratorEvent::TrackEnded {
+                reason: reason.clone(),
+            });
         }
 
         // Si el tema terminó normalmente y no estamos en bucle, intentamos auto-avanzar la cola
         if reason == "eof" && !self.desired_loop.load(Ordering::SeqCst) {
-            if let Ok(()) = self.next().await {
+            if let Ok(()) = self.next_owned(Some(intent)).await {
                 if self.current_track.read().await.is_some() {
                     return;
                 }
             }
         }
 
+        let _effects = self.effects.lock().await;
+        if !self.owns(intent) {
+            return;
+        }
         *self.current_track.write().await = None;
         self.desired_paused.store(false, Ordering::SeqCst);
         store_f64(&self.last_position, 0.0);
@@ -375,11 +418,11 @@ impl PlayerOrchestrator {
 
     /// Una URL firmada caducó o el stream falló: invalidamos caché, resolvemos
     /// de nuevo y reanudamos desde la última posición conocida.
-    async fn recover_track(&self, track: SearchResult, position: f64) {
-        if self
-            .recovering
-            .swap(true, Ordering::SeqCst)
-        {
+    async fn recover_track(&self, track: SearchResult, position: f64, intent: u64) {
+        if self.loaded_intent.load(Ordering::SeqCst) != intent {
+            return;
+        }
+        if self.recovering.swap(true, Ordering::SeqCst) {
             return;
         }
 
@@ -389,10 +432,22 @@ impl PlayerOrchestrator {
                 sleep(URL_RETRY_DELAY * attempt).await;
             }
 
+            if !self.owns(intent) {
+                break;
+            }
             self.resolver.invalidate(&track.id);
-            match self.resolver.resolve_audio(&track.id).await {
+            let resolved = self.resolver.resolve_audio(&track.id).await;
+            let _effects = self.effects.lock().await;
+            if !self.owns(intent) {
+                break;
+            }
+            match resolved {
                 Ok(url) => match self.controller.mpv.load(&url).await {
                     Ok(()) => {
+                        if !self.owns(intent) {
+                            self.recovering.store(false, Ordering::SeqCst);
+                            return;
+                        }
                         if let Err(err) = self.apply_desired_output().await {
                             tracing::warn!(error = %err, "failed to restore volume/loop after retry");
                         }
@@ -407,6 +462,10 @@ impl PlayerOrchestrator {
                         } else {
                             self.controller.resume().await
                         };
+                        if !self.owns(intent) {
+                            self.recovering.store(false, Ordering::SeqCst);
+                            return;
+                        }
                         self.set_mode(if paused {
                             PlayerMode::Paused
                         } else {
@@ -437,8 +496,14 @@ impl PlayerOrchestrator {
         }
 
         self.recovering.store(false, Ordering::SeqCst);
+        let _effects = self.effects.lock().await;
+        if !self.owns(intent) {
+            return;
+        }
         let message = last_error.unwrap_or_else(|| "Couldn't recover this track".to_string());
-        let _ = self.event_tx.send(OrchestratorEvent::PlaybackError(message));
+        let _ = self
+            .event_tx
+            .send(OrchestratorEvent::PlaybackError(message));
         *self.current_track.write().await = None;
         self.set_mode(PlayerMode::Stopped).await;
     }
@@ -446,16 +511,31 @@ impl PlayerOrchestrator {
     /// mpv se reinició: re-aplicamos volumen/loop y, si había un track,
     /// volvemos a cargarlo en la posición donde estaba.
     async fn restore_after_reconnect(&self) {
+        let intent = self.intent.load(Ordering::SeqCst);
         if self.recovering.swap(true, Ordering::SeqCst) {
             return;
         }
 
         let track = self.current_track.read().await.clone();
+        if self.loaded_intent.load(Ordering::SeqCst) != intent {
+            self.recovering.store(false, Ordering::SeqCst);
+            return;
+        }
         if let Some(track) = track {
             let position = load_f64(&self.last_position);
-            match self.resolver.resolve_audio(&track.id).await {
+            let resolved = self.resolver.resolve_audio(&track.id).await;
+            let _effects = self.effects.lock().await;
+            if !self.owns(intent) {
+                self.recovering.store(false, Ordering::SeqCst);
+                return;
+            }
+            match resolved {
                 Ok(url) => match self.controller.mpv.load(&url).await {
                     Ok(()) => {
+                        if !self.owns(intent) {
+                            self.recovering.store(false, Ordering::SeqCst);
+                            return;
+                        }
                         let _ = self.apply_desired_output().await;
                         if position > 1.0 {
                             let _ = self.controller.seek(position).await;
@@ -466,6 +546,10 @@ impl PlayerOrchestrator {
                         } else {
                             self.controller.resume().await
                         };
+                        if !self.owns(intent) {
+                            self.recovering.store(false, Ordering::SeqCst);
+                            return;
+                        }
                         self.set_mode(if paused {
                             PlayerMode::Paused
                         } else {
@@ -487,7 +571,10 @@ impl PlayerOrchestrator {
                 }
             }
         } else {
-            let _ = self.apply_desired_output().await;
+            let _effects = self.effects.lock().await;
+            if self.owns(intent) {
+                let _ = self.apply_desired_output().await;
+            }
         }
 
         self.recovering.store(false, Ordering::SeqCst);
@@ -513,55 +600,100 @@ impl PlayerOrchestrator {
         let mut mode = self.mode.write().await;
         if *mode != new_mode {
             *mode = new_mode;
-            let _ = self.event_tx.send(OrchestratorEvent::StateChanged(new_mode));
+            let _ = self
+                .event_tx
+                .send(OrchestratorEvent::StateChanged(new_mode));
         }
     }
 
     /// Carga y reproduce un track.
     pub async fn play(&self, track: SearchResult) -> Result<(), CadenceError> {
-        self.set_mode(PlayerMode::Loading).await;
+        self.play_entry(track, None).await
+    }
+
+    async fn play_entry(
+        &self,
+        track: SearchResult,
+        entry_id: Option<String>,
+    ) -> Result<(), CadenceError> {
+        self.play_entry_owned(track, entry_id, None).await
+    }
+
+    async fn play_entry_owned(
+        &self,
+        track: SearchResult,
+        entry_id: Option<String>,
+        expected: Option<u64>,
+    ) -> Result<(), CadenceError> {
+        let Some(intent) = self.begin_intent(expected) else {
+            return Ok(());
+        };
+        {
+            let _effects = self.effects.lock().await;
+            if !self.owns(intent) {
+                return Ok(());
+            }
+            *self.pending_queue_entry.write().await = entry_id.clone().map(|id| (intent, id));
+            self.set_mode(PlayerMode::Loading).await;
+        }
 
         let audio_url = match self.resolver.resolve_audio(&track.id).await {
             Ok(url) => url,
             Err(err) => {
+                let _effects = self.effects.lock().await;
+                if !self.owns(intent) {
+                    return Ok(());
+                }
+                *self.pending_queue_entry.write().await = None;
                 self.set_mode(PlayerMode::Stopped).await;
                 return Err(err);
             }
         };
 
+        let _effects = self.effects.lock().await;
+        if !self.owns(intent) {
+            return Ok(());
+        }
+        // Mantener sincronizada la cola de reproducción
+        let selected = {
+            let queue = self.queue.read().await;
+            queue
+                .iter()
+                .find(|item| match &entry_id {
+                    Some(id) => item.id == *id,
+                    None => item.track.id == track.id,
+                })
+                .cloned()
+        };
+        let selected = match selected {
+            Some(item) => item,
+            None if entry_id.is_none() => self.add_to_queue(track.clone()).await,
+            None => {
+                *self.pending_queue_entry.write().await = None;
+                self.restore_loaded_mode(intent).await;
+                return Ok(());
+            }
+        };
+        *self.pending_queue_entry.write().await = None;
+        {
+            let queue = self.queue.read().await;
+            *self.current_queue_index.write().await =
+                queue.iter().position(|i| i.id == selected.id);
+            self.queue_gap.store(false, Ordering::SeqCst);
+        }
+
         *self.current_track.write().await = Some(track.clone());
         store_f64(&self.last_position, 0.0);
         self.desired_paused.store(false, Ordering::SeqCst);
 
-        // Mantener sincronizada la cola de reproducción
-        {
-            let mut queue = self.queue.write().await;
-            let mut current_idx = self.current_queue_index.write().await;
-            if let Some(pos) = queue.iter().position(|i| i.track.id == track.id) {
-                *current_idx = Some(pos);
-            } else {
-                let counter = self.queue_id_counter.fetch_add(1, Ordering::SeqCst);
-                let id = format!(
-                    "q_{}_{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                    counter
-                );
-                let item = QueueItem {
-                    id,
-                    track: track.clone(),
-                };
-                queue.push(item);
-                *current_idx = Some(queue.len() - 1);
-                let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
-            }
-        }
-
         // `loadfile` reemplaza el archivo actual; no hace falta stop previo
         // (un stop extra generaría end-file y podría disparar una recuperación).
-        if let Err(err) = self.controller.mpv.load(&audio_url).await {
+        self.loaded_intent.store(intent, Ordering::SeqCst);
+        let loaded = self.controller.mpv.load(&audio_url).await;
+        if !self.owns(intent) {
+            return Ok(());
+        }
+        if let Err(err) = loaded {
             *self.current_track.write().await = None;
             self.set_mode(PlayerMode::Stopped).await;
             return Err(err);
@@ -571,6 +703,9 @@ impl PlayerOrchestrator {
             tracing::warn!(error = %err, "failed to apply volume/loop on play");
         }
 
+        if !self.owns(intent) {
+            return Ok(());
+        }
         // Formatear título limpio en mpv (para MPRIS, controles de medios en Windows y lockscreens)
         let display_title = if let Some(ref artist) = track.artist {
             format!("{} - {}", artist, track.title)
@@ -579,8 +714,13 @@ impl PlayerOrchestrator {
         };
         let _ = self.controller.set_media_title(&display_title).await;
 
+        if !self.owns(intent) {
+            return Ok(());
+        }
         self.set_mode(PlayerMode::Playing).await;
-        let _ = self.event_tx.send(OrchestratorEvent::TrackStarted(track.clone()));
+        let _ = self
+            .event_tx
+            .send(OrchestratorEvent::TrackStarted(track.clone()));
 
         // Auto-fetch de letras en segundo plano (fire-and-forget, nunca bloquea el playback)
         if let Some(ref lyrics) = self.lyrics {
@@ -592,6 +732,35 @@ impl PlayerOrchestrator {
         self.prefetch_next_track().await;
 
         Ok(())
+    }
+
+    /// Cancel a selection without touching the audio that is already loaded.
+    /// The caller holds `effects` and owns this intent.
+    async fn restore_loaded_mode(&self, intent: u64) {
+        self.loaded_intent.store(intent, Ordering::SeqCst);
+        let mode = if self.current_track.read().await.is_none() {
+            PlayerMode::Stopped
+        } else if self.desired_paused.load(Ordering::SeqCst) {
+            PlayerMode::Paused
+        } else {
+            PlayerMode::Playing
+        };
+        self.set_mode(mode).await;
+    }
+
+    fn begin_intent(&self, expected: Option<u64>) -> Option<u64> {
+        match expected {
+            Some(old) => self
+                .intent
+                .compare_exchange(old, old + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .ok()
+                .map(|v| v + 1),
+            None => Some(self.intent.fetch_add(1, Ordering::SeqCst) + 1),
+        }
+    }
+
+    fn owns(&self, intent: u64) -> bool {
+        self.intent.load(Ordering::SeqCst) == intent
     }
 
     /// Pausa la reproducción.
@@ -608,6 +777,18 @@ impl PlayerOrchestrator {
 
     /// Detiene la reproducción.
     pub async fn stop(&self) -> Result<(), CadenceError> {
+        self.stop_owned(None).await
+    }
+
+    async fn stop_owned(&self, expected: Option<u64>) -> Result<(), CadenceError> {
+        let Some(intent) = self.begin_intent(expected) else {
+            return Ok(());
+        };
+        let _effects = self.effects.lock().await;
+        if !self.owns(intent) {
+            return Ok(());
+        }
+        *self.pending_queue_entry.write().await = None;
         self.desired_paused.store(false, Ordering::SeqCst);
         store_f64(&self.last_position, 0.0);
         *self.current_track.write().await = None;
@@ -623,6 +804,7 @@ impl PlayerOrchestrator {
     }
 
     pub async fn seek(&self, position_seconds: f64) -> Result<(), CadenceError> {
+        let intent = self.intent.load(Ordering::SeqCst);
         let position = position_seconds.max(0.0);
         store_f64(&self.last_position, position);
         match self.controller.seek(position).await {
@@ -632,7 +814,7 @@ impl PlayerOrchestrator {
                 // la pista en la posición solicitada antes de rendirnos.
                 let track = self.current_track.read().await.clone();
                 if let Some(track) = track {
-                    self.recover_track(track, position).await;
+                    self.recover_track(track, position, intent).await;
                     if self.current_track.read().await.is_some() {
                         return Ok(());
                     }
@@ -649,33 +831,50 @@ impl PlayerOrchestrator {
 
     /// Salta al siguiente tema en la cola.
     pub async fn next(&self) -> Result<(), CadenceError> {
+        self.next_owned(None).await
+    }
+
+    async fn next_owned(&self, expected: Option<u64>) -> Result<(), CadenceError> {
         let next_track = {
             let queue = self.queue.read().await;
             if queue.is_empty() {
                 None
             } else {
-                let mut current_idx = self.current_queue_index.write().await;
-                let next_idx = match *current_idx {
+                let current_idx = self.current_queue_index.read().await;
+                let pending = self.pending_queue_entry.read().await;
+                let pending_idx = pending
+                    .as_ref()
+                    .and_then(|(_, id)| queue.iter().position(|item| item.id == *id));
+                let next_idx = match pending_idx.or(*current_idx) {
                     Some(idx) => {
-                        if idx + 1 < queue.len() {
-                            idx + 1
+                        let candidate =
+                            if pending_idx.is_none() && self.queue_gap.load(Ordering::SeqCst) {
+                                idx
+                            } else {
+                                idx + 1
+                            };
+                        if candidate < queue.len() {
+                            candidate
                         } else if self.desired_loop.load(Ordering::SeqCst) {
                             0
                         } else {
-                            return self.stop().await;
+                            drop(pending);
+                            drop(current_idx);
+                            drop(queue);
+                            return self.stop_owned(expected).await;
                         }
                     }
                     None => 0,
                 };
-                *current_idx = Some(next_idx);
-                Some(queue[next_idx].track.clone())
+                Some(queue[next_idx].clone())
             }
         };
 
-        if let Some(track) = next_track {
-            self.play(track).await
+        if let Some(item) = next_track {
+            self.play_entry_owned(item.track, Some(item.id), expected)
+                .await
         } else {
-            self.stop().await
+            self.stop_owned(expected).await
         }
     }
 
@@ -691,18 +890,17 @@ impl PlayerOrchestrator {
             if queue.is_empty() {
                 None
             } else {
-                let mut current_idx = self.current_queue_index.write().await;
+                let current_idx = self.current_queue_index.read().await;
                 let prev_idx = match *current_idx {
                     Some(idx) if idx > 0 => idx - 1,
                     Some(_) | None => 0,
                 };
-                *current_idx = Some(prev_idx);
-                Some(queue[prev_idx].track.clone())
+                Some(queue[prev_idx].clone())
             }
         };
 
-        if let Some(track) = prev_track {
-            self.play(track).await
+        if let Some(item) = prev_track {
+            self.play_entry(item.track, Some(item.id)).await
         } else {
             self.seek(0.0).await
         }
@@ -725,7 +923,9 @@ impl PlayerOrchestrator {
         );
         let item = QueueItem { id, track };
         queue.push(item.clone());
-        let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+        let _ = self
+            .event_tx
+            .send(OrchestratorEvent::QueueUpdated(queue.clone()));
         drop(queue);
         self.prefetch_next_track().await;
         item
@@ -744,11 +944,14 @@ impl PlayerOrchestrator {
         );
         let item = QueueItem { id, track };
         let insert_idx = match *self.current_queue_index.read().await {
+            Some(idx) if self.queue_gap.load(Ordering::SeqCst) => idx.min(queue.len()),
             Some(idx) => (idx + 1).min(queue.len()),
             None => queue.len(),
         };
         queue.insert(insert_idx, item.clone());
-        let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+        let _ = self
+            .event_tx
+            .send(OrchestratorEvent::QueueUpdated(queue.clone()));
         drop(queue);
         self.prefetch_next_track().await;
         item
@@ -760,8 +963,13 @@ impl PlayerOrchestrator {
             let queue = self.queue.read().await;
             let current_idx = *self.current_queue_index.read().await;
             if let Some(idx) = current_idx {
-                if idx + 1 < queue.len() {
-                    let t = queue[idx + 1].track.clone();
+                let next = if self.queue_gap.load(Ordering::SeqCst) {
+                    idx
+                } else {
+                    idx + 1
+                };
+                if next < queue.len() {
+                    let t = queue[next].track.clone();
                     (Some(t.id.clone()), Some(t))
                 } else if self.desired_loop.load(Ordering::SeqCst) && !queue.is_empty() {
                     let t = queue[0].track.clone();
@@ -794,18 +1002,30 @@ impl PlayerOrchestrator {
     }
 
     pub async fn remove_from_queue(&self, item_id: &str) -> bool {
+        let _effects = self.effects.lock().await;
         let mut queue = self.queue.write().await;
         if let Some(pos) = queue.iter().position(|i| i.id == item_id) {
             queue.remove(pos);
+            let pending = self.pending_queue_entry.read().await.clone();
+            if let Some((pending_intent, id)) = pending {
+                if id == item_id {
+                    *self.pending_queue_entry.write().await = None;
+                    if let Some(intent) = self.begin_intent(Some(pending_intent)) {
+                        self.restore_loaded_mode(intent).await;
+                    }
+                }
+            }
             let mut current_idx = self.current_queue_index.write().await;
             if let Some(idx) = *current_idx {
                 if pos < idx {
                     *current_idx = Some(idx.saturating_sub(1));
-                } else if pos == idx && pos >= queue.len() {
-                    *current_idx = if queue.is_empty() { None } else { Some(queue.len() - 1) };
+                } else if pos == idx {
+                    self.queue_gap.store(true, Ordering::SeqCst);
                 }
             }
-            let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(queue.clone()));
+            let _ = self
+                .event_tx
+                .send(OrchestratorEvent::QueueUpdated(queue.clone()));
             true
         } else {
             false
@@ -816,6 +1036,7 @@ impl PlayerOrchestrator {
         let mut queue = self.queue.write().await;
         queue.clear();
         *self.current_queue_index.write().await = None;
+        self.queue_gap.store(false, Ordering::SeqCst);
         let _ = self.event_tx.send(OrchestratorEvent::QueueUpdated(vec![]));
     }
 
@@ -827,10 +1048,9 @@ impl PlayerOrchestrator {
                     message: format!("Queue index {} out of bounds", index),
                 });
             }
-            *self.current_queue_index.write().await = Some(index);
-            queue[index].track.clone()
+            queue[index].clone()
         };
-        self.play(track).await
+        self.play_entry(track.track, Some(track.id)).await
     }
 
     /// Obtiene estado completo para el frontend.
@@ -922,9 +1142,7 @@ impl PlayerOrchestrator {
 
     /// Suscripción idempotente: solo el primer llamador recibe el receiver.
     /// Evita registrar N tareas emisoras si el frontend re-monta.
-    pub fn take_events_subscription(
-        &self,
-    ) -> Option<broadcast::Receiver<OrchestratorEvent>> {
+    pub fn take_events_subscription(&self) -> Option<broadcast::Receiver<OrchestratorEvent>> {
         if self.events_subscribed.swap(true, Ordering::SeqCst) {
             None
         } else {
@@ -948,7 +1166,7 @@ impl PlayerOrchestrator {
 
     /// Apaga el orquestador y mpv.
     pub async fn shutdown(&self) {
-        let _ = self.controller.stop().await;
+        let _ = self.stop().await;
         self.controller.mpv.shutdown().await;
     }
 }
@@ -1002,6 +1220,388 @@ impl PlayerOrchestratorBuilder {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn duplicate_gap_and_rejection_boundaries() {
+        let player = fixture();
+        let first = player.add_to_queue(track("first")).await;
+        let active = player.add_to_queue(track("active")).await;
+        player.add_to_queue(track("successor")).await;
+        player.play_queue_index(1).await.unwrap();
+
+        let before = player.get_queue().await;
+        let error = player.play_queue_index(3).await.unwrap_err();
+        assert!(matches!(error, CadenceError::QueueError { message }
+            if message == "Queue index 3 out of bounds"));
+        assert_eq!(player.get_queue().await, before);
+        assert_eq!(player.get_state().await.current.unwrap().title, "active");
+
+        assert!(player.remove_from_queue(&active.id).await);
+        assert!(player.remove_from_queue(&first.id).await);
+        assert_eq!(player.get_state().await.current.unwrap().title, "active");
+        player.next().await.unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "successor");
+
+        let last = player.get_queue().await[0].id.clone();
+        assert!(player.remove_from_queue(&last).await);
+        assert_eq!(player.get_state().await.current.unwrap().title, "successor");
+        player.next().await.unwrap();
+        assert!(player.get_state().await.current.is_none());
+        assert!(player.get_queue().await.is_empty());
+    }
+
+    fn fixture() -> Arc<PlayerOrchestrator> {
+        let mpv = Arc::new(MpvPlayer::fake());
+        Arc::new(PlayerOrchestrator::new(
+            PlaybackController::new(mpv.clone()),
+            TrackResolver::new(Arc::new(YtDlpService::new())),
+            mpv.subscribe_events(),
+            mpv.subscribe_status(),
+            None,
+        ))
+    }
+
+    fn track(title: &str) -> SearchResult {
+        SearchResult {
+            id: "local:/fake.wav".into(),
+            title: title.into(),
+            artist: None,
+            duration_seconds: 10,
+            thumbnail_url: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicates_navigate_by_entry_and_previous_is_preserved() {
+        let player = fixture();
+        let a = player.add_to_queue(track("first")).await;
+        let b = player.add_to_queue(track("second")).await;
+        player.add_to_queue(track("third")).await;
+        assert_ne!(a.id, b.id);
+        player.play_queue_index(1).await.unwrap();
+        player.next().await.unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "third");
+        player.previous().await.unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "second");
+    }
+
+    #[tokio::test]
+    async fn removing_active_keeps_audio_and_next_uses_former_successor() {
+        let player = fixture();
+        let a = player.add_to_queue(track("first")).await;
+        player.add_to_queue(track("second")).await;
+        player.add_to_queue(track("third")).await;
+        player.play_queue_index(0).await.unwrap();
+        assert!(player.remove_from_queue(&a.id).await);
+        assert_eq!(player.get_state().await.current.unwrap().title, "first");
+        player.next().await.unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "second");
+        player.stop().await.unwrap();
+        assert!(player.get_state().await.current.is_none());
+        assert_eq!(player.get_queue().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn slow_play_cannot_override_new_play_or_stop() {
+        for stop in [false, true] {
+            let mut player = fixture();
+            let gate = Arc::new(ResolutionGate {
+                entered: tokio::sync::Notify::new(),
+                release: tokio::sync::Semaphore::new(0),
+            });
+            Arc::get_mut(&mut player).unwrap().resolver.gate = Some(gate.clone());
+            let old = player.clone();
+            let pending = tokio::spawn(async move {
+                let mut t = track("old");
+                t.id = "local:/blocked.wav".into();
+                old.play(t).await.unwrap();
+            });
+            gate.entered.notified().await;
+            if stop {
+                player.stop().await.unwrap();
+            } else {
+                player.play(track("new")).await.unwrap();
+            }
+            gate.release.add_permits(1);
+            pending.await.unwrap();
+            let state = player.get_state().await;
+            assert_eq!(
+                state.current.map(|t| t.title),
+                if stop { None } else { Some("new".into()) }
+            );
+            assert_eq!(player.get_queue().await.len(), usize::from(!stop));
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_recovery_cannot_override_new_play_or_stop() {
+        for stop in [false, true] {
+            let mut player = fixture();
+            let gate = Arc::new(ResolutionGate {
+                entered: tokio::sync::Notify::new(),
+                release: tokio::sync::Semaphore::new(0),
+            });
+            Arc::get_mut(&mut player).unwrap().resolver.gate = Some(gate.clone());
+            player.play(track("original")).await.unwrap();
+            let intent = player.intent.load(Ordering::SeqCst);
+            let old = player.clone();
+            let pending = tokio::spawn(async move {
+                let mut t = track("old");
+                t.id = "local:/blocked.wav".into();
+                old.recover_track(t, 8.0, intent).await;
+            });
+            gate.entered.notified().await;
+            if stop {
+                player.stop().await.unwrap();
+            } else {
+                player.play(track("new")).await.unwrap();
+            }
+            gate.release.add_permits(1);
+            pending.await.unwrap();
+            assert_eq!(
+                player.get_state().await.current.map(|t| t.title),
+                if stop { None } else { Some("new".into()) }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_play_enqueues_and_queue_edits_preserve_navigation() {
+        let player = fixture();
+        player.play(track("direct")).await.unwrap();
+        assert_eq!(player.get_queue().await.len(), 1);
+        let next = player.add_to_queue_next(track("inserted")).await;
+        player.next().await.unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "inserted");
+        assert!(!player.remove_from_queue("missing").await);
+        assert!(player.remove_from_queue(&next.id).await);
+        player.set_loop(true).await.unwrap();
+        player.next().await.unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "direct");
+        player.clear_queue().await;
+        assert!(player.get_queue().await.is_empty());
+        assert!(player.get_state().await.current.is_some());
+        player.next().await.unwrap();
+        assert!(player.get_state().await.current.is_none());
+        assert!(player.get_state().await.looping);
+    }
+
+    #[tokio::test]
+    async fn stop_serializes_after_an_already_sent_load() {
+        let (mpv, mut commands) = MpvPlayer::controlled_fake();
+        let mpv = Arc::new(mpv);
+        let player = Arc::new(PlayerOrchestrator::new(
+            PlaybackController::new(mpv.clone()),
+            TrackResolver::new(Arc::new(YtDlpService::new())),
+            mpv.subscribe_events(),
+            mpv.subscribe_status(),
+            None,
+        ));
+        let mut events = player.subscribe_events();
+        let old = player.clone();
+        let playing = tokio::spawn(async move {
+            old.play(track("old")).await.unwrap();
+        });
+        let (command, load_reply) = commands.recv().await.unwrap();
+        assert_eq!(command, "load:/fake.wav");
+        let stopping = player.stop();
+        tokio::pin!(stopping);
+        tokio::select! {
+            biased;
+            _ = &mut stopping => panic!("stop must wait for in-flight load"),
+            _ = std::future::ready(()) => {}
+        }
+        assert!(commands.try_recv().is_err());
+        load_reply.send(Ok(())).unwrap();
+        let acknowledge = async {
+            while let Some((command, reply)) = commands.recv().await {
+                let stopped = command == "stop";
+                reply.send(Ok(())).unwrap();
+                if stopped {
+                    break;
+                }
+            }
+        };
+        let (result, ()) = tokio::join!(stopping, acknowledge);
+        result.unwrap();
+        playing.await.unwrap();
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, OrchestratorEvent::TrackStarted(_)));
+        }
+        assert!(commands.try_recv().is_err());
+        assert!(player.get_state().await.current.is_none());
+    }
+
+    #[tokio::test]
+    async fn eof_advance_cannot_supersede_a_newer_user_intent() {
+        let player = fixture();
+        player.play(track("old")).await.unwrap();
+        let ended_intent = player.intent.load(Ordering::SeqCst);
+        player.add_to_queue(track("successor")).await;
+        player.play(track("new")).await.unwrap();
+        player.next_owned(Some(ended_intent)).await.unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "new");
+        player.stop().await.unwrap();
+        player.next_owned(Some(ended_intent)).await.unwrap();
+        assert!(player.get_state().await.current.is_none());
+    }
+
+    #[tokio::test]
+    async fn playback_preserves_output_preferences_and_previous_restart() {
+        use crate::models::player_state::AudioPreset;
+        let player = fixture();
+        player.set_volume(37.0).await.unwrap();
+        player.set_loop(true).await.unwrap();
+        player.set_speed(1.25).await.unwrap();
+        player
+            .set_audio_preset(AudioPreset::BassBoost)
+            .await
+            .unwrap();
+        player.play(track("first")).await.unwrap();
+        player.add_to_queue(track("second")).await;
+        player.next().await.unwrap();
+        player.seek(5.0).await.unwrap();
+        player.previous().await.unwrap();
+        let state = player.get_state().await;
+        assert_eq!(state.current.unwrap().title, "second");
+        assert_eq!(state.position_seconds, 0.0);
+        assert_eq!(state.volume, 37.0);
+        assert!(state.looping);
+        assert_eq!(state.speed, 1.25);
+        assert_eq!(state.audio_preset, AudioPreset::BassBoost);
+    }
+
+    fn gated_fixture() -> (Arc<PlayerOrchestrator>, Arc<ResolutionGate>) {
+        let mut player = fixture();
+        let gate = Arc::new(ResolutionGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        Arc::get_mut(&mut player).unwrap().resolver.gate = Some(gate.clone());
+        (player, gate)
+    }
+
+    fn last_mode(events: &mut broadcast::Receiver<OrchestratorEvent>) -> Option<PlayerMode> {
+        let mut mode = None;
+        while let Ok(event) = events.try_recv() {
+            match event {
+                OrchestratorEvent::StateChanged(value) => mode = Some(value),
+                OrchestratorEvent::TrackStarted(track) => {
+                    assert_ne!(track.title, "pending", "removed selection must not start");
+                }
+                _ => {}
+            }
+        }
+        mode
+    }
+
+    #[tokio::test]
+    async fn removing_pending_selection_restores_loaded_or_idle_mode() {
+        for expected in [PlayerMode::Playing, PlayerMode::Paused, PlayerMode::Stopped] {
+            let (player, gate) = gated_fixture();
+            if expected != PlayerMode::Stopped {
+                player.play(track("original")).await.unwrap();
+                if expected == PlayerMode::Paused {
+                    player.pause().await.unwrap();
+                }
+            }
+            let mut blocked = track("pending");
+            blocked.id = "local:/blocked.wav".into();
+            let item = player.add_to_queue(blocked).await;
+            let index = player.get_queue().await.len() - 1;
+            let mut events = player.subscribe_events();
+            let old = player.clone();
+            let pending = tokio::spawn(async move { old.play_queue_index(index).await });
+            gate.entered.notified().await;
+            assert_eq!(last_mode(&mut events), Some(PlayerMode::Loading));
+            assert!(player.remove_from_queue(&item.id).await);
+            let restored = last_mode(&mut events);
+            gate.release.add_permits(1);
+            pending.await.unwrap().unwrap();
+            assert_eq!(
+                restored,
+                Some(expected),
+                "removal must restore mode immediately"
+            );
+            assert_eq!(
+                last_mode(&mut events),
+                None,
+                "stale resolution must stay silent"
+            );
+            assert_eq!(
+                player.get_state().await.current.map(|t| t.title),
+                if expected == PlayerMode::Stopped {
+                    None
+                } else {
+                    Some("original".into())
+                }
+            );
+            assert!(!player
+                .get_queue()
+                .await
+                .iter()
+                .any(|entry| entry.id == item.id));
+        }
+    }
+
+    #[tokio::test]
+    async fn removed_pending_completion_cannot_override_successor_or_stop() {
+        for stop in [false, true] {
+            let (player, gate) = gated_fixture();
+            player.play(track("original")).await.unwrap();
+            let mut blocked = track("pending");
+            blocked.id = "local:/blocked.wav".into();
+            let item = player.add_to_queue(blocked).await;
+            player.add_to_queue(track("successor")).await;
+            let old = player.clone();
+            let pending = tokio::spawn(async move { old.next().await });
+            gate.entered.notified().await;
+            assert!(player.remove_from_queue(&item.id).await);
+            if stop {
+                player.stop().await.unwrap();
+            } else {
+                player.next().await.unwrap();
+            }
+            let mut events = player.subscribe_events();
+            gate.release.add_permits(1);
+            pending.await.unwrap().unwrap();
+            assert_eq!(last_mode(&mut events), None);
+            assert_eq!(
+                player.get_state().await.current.map(|t| t.title),
+                if stop { None } else { Some("successor".into()) }
+            );
+            assert_eq!(player.get_queue().await.len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_next_advances_past_the_pending_entry() {
+        let (player, gate) = gated_fixture();
+        player.play(track("original")).await.unwrap();
+        let mut blocked = track("pending");
+        blocked.id = "local:/blocked.wav".into();
+        player.add_to_queue(blocked).await;
+        player.add_to_queue(track("successor")).await;
+        let old = player.clone();
+        let first = tokio::spawn(async move { old.next().await });
+        gate.entered.notified().await;
+        let mut events = player.subscribe_events();
+        let second = player.next();
+        tokio::pin!(second);
+        let finished = tokio::select! {
+            result = &mut second => Some(result),
+            _ = gate.entered.notified() => None,
+        };
+        gate.release.add_permits(2);
+        match finished {
+            Some(result) => result.unwrap(),
+            None => second.await.unwrap(),
+        }
+        first.await.unwrap().unwrap();
+        assert_eq!(player.get_state().await.current.unwrap().title, "successor");
+        assert_eq!(last_mode(&mut events), Some(PlayerMode::Playing));
+        assert_eq!(player.get_queue().await.len(), 3);
+    }
+
     #[test]
     fn f64_atomics_round_trip() {
         let atomic = AtomicU64::new(0);
@@ -1024,9 +1624,8 @@ mod tests {
         assert_eq!(connection["type"], "ConnectionChanged");
         assert_eq!(connection["data"]["connected"], false);
 
-        let state =
-            serde_json::to_value(OrchestratorEvent::StateChanged(PlayerMode::Paused))
-                .expect("serialize StateChanged");
+        let state = serde_json::to_value(OrchestratorEvent::StateChanged(PlayerMode::Paused))
+            .expect("serialize StateChanged");
         assert_eq!(state["data"], "Paused");
 
         let progress = serde_json::to_value(OrchestratorEvent::Progress {

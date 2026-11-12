@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-#[cfg(unix)]
-use tokio::net::UnixStream;
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::NamedPipeClient;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::sleep;
@@ -118,6 +118,49 @@ pub struct MpvPlayer {
 }
 
 impl MpvPlayer {
+    #[cfg(test)]
+    pub(crate) fn fake() -> Self {
+        let (player, mut commands) = Self::controlled_fake();
+        tokio::spawn(async move {
+            while let Some((_, reply)) = commands.recv().await {
+                let _ = reply.send(Ok(()));
+            }
+        });
+        player
+    }
+
+    #[cfg(test)]
+    pub(crate) fn controlled_fake() -> (
+        Self,
+        mpsc::Receiver<(String, oneshot::Sender<Result<(), CadenceError>>)>,
+    ) {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(CMD_CHANNEL_CAPACITY);
+        let (_, status_rx) = watch::channel(MpvStatus::default());
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::channel(CMD_CHANNEL_CAPACITY);
+        tokio::spawn(async move {
+            while let Some(cmd) = cmd_rx.recv().await {
+                let command = match cmd {
+                    MpvCommand::SetProperty { name, reply_tx, .. } => (name, reply_tx),
+                    MpvCommand::LoadFile { url, reply_tx } => (format!("load:{url}"), reply_tx),
+                    MpvCommand::Stop { reply_tx } => ("stop".into(), reply_tx),
+                    MpvCommand::Shutdown => break,
+                };
+                if tx.send(command).await.is_err() {
+                    break;
+                }
+            }
+        });
+        (
+            Self {
+                cmd_tx,
+                status_rx,
+                event_tx,
+            },
+            rx,
+        )
+    }
+
     /// Conecta a mpv, spawnea el proceso y arranca el supervisor que lo
     /// reinicia automáticamente si se cae.
     pub async fn connect(socket_path: PathBuf) -> Result<Self, CadenceError> {
@@ -253,10 +296,7 @@ impl MpvPlayer {
 
     /// Espera `delay`, pero aborta si llega un `Shutdown` por el canal.
     /// Devuelve false si se pidió apagar.
-    async fn sleep_or_shutdown(
-        cmd_rx: &mut mpsc::Receiver<MpvCommand>,
-        delay: Duration,
-    ) -> bool {
+    async fn sleep_or_shutdown(cmd_rx: &mut mpsc::Receiver<MpvCommand>, delay: Duration) -> bool {
         let sleep = tokio::time::sleep(delay);
         tokio::pin!(sleep);
         loop {
@@ -289,7 +329,10 @@ impl MpvPlayer {
             if path_str.starts_with(r"\\.\pipe\") {
                 format!("--input-ipc-server={}", path_str)
             } else {
-                format!("--input-ipc-server=\\\\.\\pipe\\cadence-mpv-{}", std::process::id())
+                format!(
+                    "--input-ipc-server=\\\\.\\pipe\\cadence-mpv-{}",
+                    std::process::id()
+                )
             }
         } else {
             format!("--input-ipc-server={}", socket_path.display())
@@ -347,7 +390,9 @@ impl MpvPlayer {
     async fn wait_for_socket(socket_path: &Path) -> Result<NamedPipeClient, CadenceError> {
         let pipe_name = socket_path.to_string_lossy();
         for _ in 0..SOCKET_CONNECT_MAX_ATTEMPTS {
-            if let Ok(client) = tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name) {
+            if let Ok(client) =
+                tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)
+            {
                 return Ok(client);
             }
             sleep(SOCKET_CONNECT_RETRY_DELAY).await;
@@ -367,11 +412,13 @@ impl MpvPlayer {
     ) -> ConnectionOutcome
     where
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
-        W: tokio::io::AsyncWrite + Unpin + Send + 'static, {
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
         let mut pending_replies: std::collections::HashMap<u64, PendingCommand> =
             std::collections::HashMap::new();
         let mut request_id_counter: u64 = 0;
         let mut line_buffer = String::new();
+        let mut active_entry = None;
 
         // Observar las propiedades que la UI necesita. mpv envía un
         // `property-change` inicial con el valor actual por cada observer,
@@ -520,6 +567,12 @@ impl MpvPlayer {
                     } else if let Some(event_name) =
                         message.get("event").and_then(Value::as_str)
                     {
+                        if event_name == "start-file" {
+                            active_entry = end_file_field(&message, "playlist_entry_id").and_then(Value::as_i64);
+                        }
+                        if event_name == "end-file" && stale_end_file(active_entry, &message) {
+                            continue;
+                        }
                         match Self::handle_mpv_event(
                             event_name,
                             &message,
@@ -554,15 +607,12 @@ impl MpvPlayer {
     ) -> Option<ConnectionOutcome> {
         match event_name {
             "property-change" => {
-                let name = message
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .or_else(|| {
-                        message
-                            .get("id")
-                            .and_then(Value::as_u64)
-                            .and_then(observed_name)
-                    });
+                let name = message.get("name").and_then(Value::as_str).or_else(|| {
+                    message
+                        .get("id")
+                        .and_then(Value::as_u64)
+                        .and_then(observed_name)
+                });
                 let name = name?;
                 let data = message.get("data").cloned().unwrap_or(Value::Null);
                 apply_property(status, name, &data, status_tx, event_tx);
@@ -612,7 +662,9 @@ impl MpvPlayer {
             })
             .await
             .map_err(|_| CadenceError::MpvConnectionClosed)?;
-        reply_rx.await.map_err(|_| CadenceError::MpvConnectionClosed)?
+        reply_rx
+            .await
+            .map_err(|_| CadenceError::MpvConnectionClosed)?
     }
 
     pub async fn pause(&self) -> Result<(), CadenceError> {
@@ -630,7 +682,9 @@ impl MpvPlayer {
             .send(MpvCommand::Stop { reply_tx })
             .await
             .map_err(|_| CadenceError::MpvConnectionClosed)?;
-        reply_rx.await.map_err(|_| CadenceError::MpvConnectionClosed)?
+        reply_rx
+            .await
+            .map_err(|_| CadenceError::MpvConnectionClosed)?
     }
 
     pub async fn set_volume(&self, level: f64) -> Result<(), CadenceError> {
@@ -673,7 +727,9 @@ impl MpvPlayer {
             })
             .await
             .map_err(|_| CadenceError::MpvConnectionClosed)?;
-        reply_rx.await.map_err(|_| CadenceError::MpvConnectionClosed)?
+        reply_rx
+            .await
+            .map_err(|_| CadenceError::MpvConnectionClosed)?
     }
 
     pub async fn set_media_title(&self, title: &str) -> Result<(), CadenceError> {
@@ -685,7 +741,8 @@ impl MpvPlayer {
     }
 
     pub async fn set_speed(&self, speed: f64) -> Result<(), CadenceError> {
-        self.set_property("speed", json!(speed.clamp(0.25, 3.0))).await
+        self.set_property("speed", json!(speed.clamp(0.25, 3.0)))
+            .await
     }
 
     /// Fuerza el apagado de mpv (para shutdown de app).
@@ -699,7 +756,10 @@ impl MpvPlayer {
     }
 }
 
-async fn send_json<W: tokio::io::AsyncWrite + Unpin>(writer: &mut W, value: &Value) -> Result<(), CadenceError> {
+async fn send_json<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    value: &Value,
+) -> Result<(), CadenceError> {
     let mut payload = serde_json::to_vec(value).map_err(CadenceError::MpvSerialize)?;
     payload.push(b'\n');
     writer
@@ -801,11 +861,18 @@ fn end_file_error(message: &Value) -> Option<String> {
         _ => None,
     };
 
-    non_empty(end_file_field(message, "error")).or_else(|| match end_file_field(message, "file_error")
-    {
-        Some(Value::Bool(true)) => Some("file could not be opened".to_string()),
-        other => non_empty(other),
+    non_empty(end_file_field(message, "error")).or_else(|| {
+        match end_file_field(message, "file_error") {
+            Some(Value::Bool(true)) => Some("file could not be opened".to_string()),
+            other => non_empty(other),
+        }
     })
+}
+
+// Missing IDs retain compatibility with older mpv versions.
+fn stale_end_file(active_entry: Option<i64>, message: &Value) -> bool {
+    matches!((active_entry, end_file_field(message, "playlist_entry_id").and_then(Value::as_i64)),
+        (Some(active), Some(ended)) if active != ended)
 }
 
 fn observed_name(id: u64) -> Option<&'static str> {
@@ -952,6 +1019,14 @@ mod tests {
     }
 
     #[test]
+    fn end_file_identity_ignores_old_entries_but_preserves_legacy_events() {
+        assert!(stale_end_file(Some(3), &json!({"playlist_entry_id": 2})));
+        assert!(!stale_end_file(Some(3), &json!({"playlist_entry_id": 3})));
+        assert!(!stale_end_file(Some(3), &json!({"reason": "eof"})));
+        assert!(!stale_end_file(None, &json!({"playlist_entry_id": 3})));
+    }
+
+    #[test]
     fn observed_property_ids_are_mapped() {
         assert_eq!(observed_name(OBS_PAUSE), Some("pause"));
         assert_eq!(observed_name(OBS_VOLUME), Some("volume"));
@@ -975,7 +1050,13 @@ mod tests {
             Ok(MpvEvent::VolumeChanged { volume }) if (volume - 42.0).abs() < f64::EPSILON
         ));
 
-        apply_property(&mut status, "loop-file", &json!("inf"), &status_tx, &event_tx);
+        apply_property(
+            &mut status,
+            "loop-file",
+            &json!("inf"),
+            &status_tx,
+            &event_tx,
+        );
         assert!(status.looping);
 
         apply_property(&mut status, "pause", &json!(true), &status_tx, &event_tx);
@@ -1004,30 +1085,20 @@ mod tests {
     /// el detalle va en el nivel del evento, no en `data`.
     #[test]
     fn end_file_from_modern_mpv_reports_eof() {
-        let message: Value = serde_json::from_str(
-            r#"{"event":"end-file","reason":"eof","playlist_entry_id":2}"#,
-        )
-        .expect("parse end-file");
+        let message: Value =
+            serde_json::from_str(r#"{"event":"end-file","reason":"eof","playlist_entry_id":2}"#)
+                .expect("parse end-file");
 
         let (status_tx, _status_rx) = watch::channel(MpvStatus::default());
         let (event_tx, mut event_rx) = broadcast::channel(8);
         let mut status = MpvStatus::default();
 
-        let outcome = MpvPlayer::handle_mpv_event(
-            "end-file",
-            &message,
-            &mut status,
-            &status_tx,
-            &event_tx,
-        );
+        let outcome =
+            MpvPlayer::handle_mpv_event("end-file", &message, &mut status, &status_tx, &event_tx);
         assert!(outcome.is_none(), "end-file must not close the connection");
 
         match event_rx.try_recv() {
-            Ok(MpvEvent::EndFile {
-                reason,
-                error,
-                ..
-            }) => {
+            Ok(MpvEvent::EndFile { reason, error, .. }) => {
                 assert_eq!(reason, "eof");
                 assert_eq!(error, None);
             }
@@ -1067,11 +1138,11 @@ mod tests {
         )
         .expect("parse end-file");
 
-        assert_eq!(end_file_field(&message, "reason").and_then(Value::as_str), Some("error"));
         assert_eq!(
-            end_file_error(&message).as_deref(),
-            Some("HTTP error 403")
+            end_file_field(&message, "reason").and_then(Value::as_str),
+            Some("error")
         );
+        assert_eq!(end_file_error(&message).as_deref(), Some("HTTP error 403"));
     }
 
     /// Un `error: ""` (string vacío) no es un error: es un fin normal.
@@ -1094,7 +1165,10 @@ mod tests {
     #[test]
     fn a_pid_that_is_not_our_mpv_is_never_killed() {
         // Nuestro propio proceso de test no es mpv → nunca lo tocamos.
-        assert!(!process_is_our_mpv(std::process::id(), Path::new("/tmp/a.sock")));
+        assert!(!process_is_our_mpv(
+            std::process::id(),
+            Path::new("/tmp/a.sock")
+        ));
         // PID imposible: sin /proc no podemos verificar, así que no matamos.
         assert!(!process_is_our_mpv(u32::MAX, Path::new("/tmp/a.sock")));
     }
