@@ -123,7 +123,7 @@ more than the UI needed, not that 15 seconds was too short.
 
 One trade-off: `--flat-playlist` never returns `thumbnail`. Fixed by
 building the thumbnail URL from YouTube's predictable per-video CDN path
-(`i.ytimg.com/vi/<id>/hqdefault.jpg`) instead of trusting a field that mode
+(`i.ytimg.com/vi/<id>/mqdefault.jpg`) instead of trusting a field that mode
 doesn't provide.
 
 ### No SQLite (yet)
@@ -174,8 +174,10 @@ assuming Rust's `Drop`/`kill_on_drop` would clean them up:
 - **mpv**: `kill_on_drop(true)` only fires if `Drop` actually runs. Tauri's
   normal shutdown path uses `std::process::exit`, which skips destructors —
   confirmed by killing the running app and finding mpv still alive
-  afterward. Fixed with an explicit `shutdown()` routine and PID file tracking
-  wired to `RunEvent::ExitRequested` and Unix signal handlers.
+  afterward. Fixed with an explicit `shutdown()` routine, owned-`Child`
+  termination (`kill()` + `wait()`), and private per-session socket cleanup
+  wired to `RunEvent::ExitRequested` and Unix signal handlers (without
+  writing shared `.pid` files or scanning `/proc`).
 - **yt-dlp**: `run_yt_dlp`'s `Command` had no `kill_on_drop` at all. When
   `tokio::time::timeout` elapses, it drops the inner future — including the
   `Child` it owns — without killing anything. The process kept running
@@ -200,13 +202,13 @@ into the interface.
 Cadence is designed to run natively on both Linux and Windows:
 
 - **IPC Transport Abstraction:**
-  - **Linux / macOS:** Uses Unix Domain Sockets (`/tmp/cadence-mpv.sock` and `/tmp/cadence-control-<user>.sock`).
+  - **Linux / macOS:** Uses Unix Domain Sockets inside a private `0700` per-user directory under `$XDG_RUNTIME_DIR` (or `/tmp` fallback): `<runtime_root>/cadence-<uid>/control.sock` and `<runtime_root>/cadence-<uid>/mpv-<pid>-<serial>/ipc.sock`, with `0600` socket permissions, owner/anti-symlink validation, and bounded control framing (`16 KiB`).
   - **Windows:** Uses Win32 Named Pipes (`\\.\pipe\cadence-mpv-<user>` and `\\.\pipe\cadence-control-<user>`).
   - mpv receives `--input-ipc-server=\\.\pipe\...` on Windows and `--input-ipc-server=/path/to/socket` on Unix.
   - Tokio I/O is unified across platforms using `tokio::io::split` over generic `AsyncRead + AsyncWrite`.
 - **Process Management & Termination:**
-  - Linux uses Unix signal handling (`SIGTERM`) and `/proc` inspects for PID tracking.
-  - Windows handles `ctrl_c` and uses `taskkill /PID {pid} /F` for stale process cleanup.
+  - Linux uses Unix signal handling (`SIGTERM`) and explicit owned-`Child` termination (`kill()` + `wait()`) with `EndpointLease::remove_socket()` cleanup on exit.
+  - Windows handles `ctrl_c` and explicit `Child` termination during shutdown.
 
 ### Audio FX & Preset Engine via `mpv`
 

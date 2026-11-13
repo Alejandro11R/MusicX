@@ -41,6 +41,12 @@ pub struct LrclibClient {
     last_request: Mutex<Instant>,
 }
 
+impl Default for LrclibClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LrclibClient {
     pub fn new() -> Self {
         let http = Client::builder()
@@ -68,6 +74,7 @@ impl LrclibClient {
     }
 
     #[cfg(test)]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     pub(super) fn for_test(base: Url) -> Self {
         Self {
             http: Client::builder()
@@ -170,12 +177,11 @@ impl LrclibClient {
 
         let mut urls = Vec::new();
         // Si tenemos un artista real, probar búsqueda exacta por track_name + artist_name primero
-        if !is_placeholder_artist {
+        if let Some(artist) = request.artist.as_deref().filter(|_| !is_placeholder_artist) {
             let mut url = self.endpoint("api/search")?;
             {
                 let mut query = url.query_pairs_mut();
-                let title = clean_title(&request.title, request.artist.as_deref());
-                let artist = request.artist.as_deref().unwrap();
+                let title = clean_title(&request.title, Some(artist));
                 query.append_pair("track_name", &title);
                 query.append_pair("artist_name", &clean_artist(artist));
             }
@@ -419,7 +425,7 @@ fn score(candidate: &LrclibTrack, request: &LyricsRequest) -> i32 {
         score += 40;
     } else {
         let any_artist_matched = candidate_artist
-            .split(|c| c == ',' || c == '/' || c == '&' || c == '•' || c == ';')
+            .split([',', '/', '&', '•', ';'])
             .map(|s| s.trim())
             .filter(|s| s.len() >= 3)
             .any(|s| raw_title.contains(s));

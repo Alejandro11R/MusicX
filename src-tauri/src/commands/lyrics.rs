@@ -3,9 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::errors::CadenceError;
-use crate::models::lyrics::{
-    LyricsCacheStats, LyricsCandidate, LyricsDoc, LyricsRequest,
-};
+use crate::models::lyrics::{LyricsCacheStats, LyricsCandidate, LyricsDoc, LyricsRequest};
 use crate::services::lyrics::LyricsService;
 
 #[tauri::command]

@@ -48,7 +48,13 @@ import { CadenceIsland } from "@/components/player/CadenceIsland";
 import { ToastNotification, type ToastMessage } from "@/components/ui/ToastNotification";
 import { InteractiveTimeline } from "@/components/ui/InteractiveTimeline";
 import { cn } from "@/lib/utils";
-import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
+import {
+  formatDuration,
+  formatHealthDiagnostic,
+  safeDuration,
+  safePosition,
+  seekTarget,
+} from "@/lib/playback";
 import { LyricsCoordinator } from "./lib/async-ownership";
 import { SearchOwnership } from "./lib/search-ownership";
 import { FocusOwnership } from "./lib/action-ownership";
@@ -1258,10 +1264,9 @@ function App() {
     // Health check inicial
     health()
       .then((h) => {
-        if (!h.mpv) {
-          setError("mpv no está disponible en el sistema.");
-        } else if (!h.yt_dlp) {
-          setError("yt-dlp no está disponible en el sistema.");
+        const diagnostic = formatHealthDiagnostic(h);
+        if (diagnostic) {
+          setError(diagnostic);
         }
       })
       .catch((err) => console.error("health() check failed:", err));

@@ -130,6 +130,7 @@ impl MpvPlayer {
     }
 
     #[cfg(test)]
+    #[allow(clippy::type_complexity)]
     pub(crate) fn controlled_fake() -> (
         Self,
         mpsc::Receiver<(String, oneshot::Sender<Result<(), CadenceError>>)>,
@@ -1038,7 +1039,8 @@ mod tests {
 
     fn unique_socket_path() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("cadence-mpv-test-{}-{id}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cadence-mpv-test-{}-{id}", std::process::id()));
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
@@ -1196,10 +1198,7 @@ mod tests {
         let (sock_b, lease_b) = MpvPlayer::allocate_mpv_session(&root).unwrap();
         assert_ne!(sock_a, sock_b);
         assert_eq!(
-            std::fs::metadata(sock_a.parent().unwrap())
-                .unwrap()
-                .mode()
-                & 0o777,
+            std::fs::metadata(sock_a.parent().unwrap()).unwrap().mode() & 0o777,
             0o700
         );
 

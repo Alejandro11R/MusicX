@@ -87,7 +87,7 @@ impl FocusEngine {
         let (state_tx, _) = watch::channel(initial_state.clone());
         let (event_tx, _) = broadcast::channel(32);
 
-        let engine = Arc::new(Self {
+        Arc::new(Self {
             transition: Mutex::new(()),
             state: RwLock::new(initial_state),
             deadline: RwLock::new(None),
@@ -98,9 +98,7 @@ impl FocusEngine {
             focus_secs: std::sync::atomic::AtomicU32::new(DEFAULT_FOCUS_SECS),
             short_break_secs: std::sync::atomic::AtomicU32::new(DEFAULT_SHORT_BREAK_SECS),
             long_break_secs: std::sync::atomic::AtomicU32::new(DEFAULT_LONG_BREAK_SECS),
-        });
-
-        engine
+        })
     }
 
     pub async fn get_state(&self) -> FocusState {
@@ -323,6 +321,7 @@ impl FocusEngine {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::services::{

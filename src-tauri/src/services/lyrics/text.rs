@@ -12,9 +12,28 @@ pub fn normalize(raw: &str) -> String {
 /// Solo elimina grupos entre paréntesis cuyo contenido sea ruido conocido.
 pub fn clean_title(raw: &str, artist: Option<&str>) -> String {
     const NOISE: &[&str] = &[
-        "official", "oficial", "video", "videoclip", "audio", "lyric", "lyrics", "letra", "letras",
-        "visualizer", "hd", "hq", "4k", "remaster", "remastered", "m/v", "mv", "explicit",
-        "clean", "topic", "en vivo", "live",
+        "official",
+        "oficial",
+        "video",
+        "videoclip",
+        "audio",
+        "lyric",
+        "lyrics",
+        "letra",
+        "letras",
+        "visualizer",
+        "hd",
+        "hq",
+        "4k",
+        "remaster",
+        "remastered",
+        "m/v",
+        "mv",
+        "explicit",
+        "clean",
+        "topic",
+        "en vivo",
+        "live",
     ];
 
     let mut output = String::with_capacity(raw.len());
@@ -52,7 +71,8 @@ pub fn clean_title(raw: &str, artist: Option<&str>) -> String {
 
     if let Some(artist) = artist {
         let prefix = format!("{} - ", artist.trim());
-        if let (Some(head), Some(tail)) = (cleaned.get(..prefix.len()), cleaned.get(prefix.len()..)) {
+        if let (Some(head), Some(tail)) = (cleaned.get(..prefix.len()), cleaned.get(prefix.len()..))
+        {
             if head.eq_ignore_ascii_case(&prefix) {
                 cleaned = tail.trim().to_string();
             }

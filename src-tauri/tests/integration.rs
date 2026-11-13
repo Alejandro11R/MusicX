@@ -97,8 +97,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str, wav_seconds: u32, mode: ResolveMode) -> Self {
-        let dir =
-            std::env::temp_dir().join(format!("cadence-integ-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cadence-integ-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         #[cfg(unix)]
         {
@@ -142,7 +141,8 @@ cat "$dir/search_result.json"
         .expect("write yt-dlp stub");
         set_executable(&stub);
 
-        std::fs::write(dir.join("search_result.json"), SEARCH_RESULT_JSON).expect("write search json");
+        std::fs::write(dir.join("search_result.json"), SEARCH_RESULT_JSON)
+            .expect("write search json");
         std::fs::write(dir.join("resolve_mode"), mode.as_str()).expect("write resolve mode");
         let resolve_calls = dir.join("resolve_calls");
         std::fs::write(&resolve_calls, "0").expect("init counter");
@@ -210,8 +210,7 @@ fn set_executable(path: &Path) {
     std::fs::set_permissions(path, perms).unwrap();
 }
 
-const SEARCH_RESULT_JSON: &str =
-    r#"{"id":"cadence-test-track","title":"Tono de prueba","artist":"Cadence Tests","duration":8.0,"ie_key":"Youtube"}"#;
+const SEARCH_RESULT_JSON: &str = r#"{"id":"cadence-test-track","title":"Tono de prueba","artist":"Cadence Tests","duration":8.0,"ie_key":"Youtube"}"#;
 
 fn sample_track(seconds: u64) -> SearchResult {
     SearchResult {
@@ -288,13 +287,17 @@ async fn mpv_plays_a_local_wav_end_to_end() {
             .unwrap_or(false)
     });
 
-    wait_until!("mpv reports playback position", Duration::from_secs(5), async {
-        player
-            .status()
-            .position_seconds
-            .map(|p| p > 0.2)
-            .unwrap_or(false)
-    });
+    wait_until!(
+        "mpv reports playback position",
+        Duration::from_secs(5),
+        async {
+            player
+                .status()
+                .position_seconds
+                .map(|p| p > 0.2)
+                .unwrap_or(false)
+        }
+    );
 
     player.pause().await.expect("pause");
     wait_until!("mpv reports pause", Duration::from_secs(3), async {
@@ -319,9 +322,12 @@ async fn mpv_plays_a_local_wav_end_to_end() {
     });
 
     // El archivo dura 3s: debe llegar `end-file` con reason "eof".
-    next_event(&mut events, "end-file eof", Duration::from_secs(20), |e| {
-        matches!(e, MpvEvent::EndFile { reason, .. } if reason == "eof")
-    })
+    next_event(
+        &mut events,
+        "end-file eof",
+        Duration::from_secs(20),
+        |e| matches!(e, MpvEvent::EndFile { reason, .. } if reason == "eof"),
+    )
     .await;
 
     player.shutdown().await;
@@ -347,9 +353,11 @@ async fn mpv_supervisor_restarts_after_crash() {
     })
     .await;
 
-    wait_until!("status reports connected again", Duration::from_secs(5), async {
-        player.status().connected
-    });
+    wait_until!(
+        "status reports connected again",
+        Duration::from_secs(5),
+        async { player.status().connected }
+    );
 
     // El handle sigue siendo utilizable tras el reinicio.
     player
@@ -412,14 +420,18 @@ async fn orchestrator_playback_cycle_works() {
     });
 
     orchestrator.pause().await.expect("pause");
-    wait_until!("orchestrator reports paused", Duration::from_secs(4), async {
-        orchestrator.get_state().await.status == PlaybackStatus::Paused
-    });
+    wait_until!(
+        "orchestrator reports paused",
+        Duration::from_secs(4),
+        async { orchestrator.get_state().await.status == PlaybackStatus::Paused }
+    );
 
     orchestrator.resume().await.expect("resume");
-    wait_until!("orchestrator reports playing", Duration::from_secs(4), async {
-        orchestrator.get_state().await.status == PlaybackStatus::Playing
-    });
+    wait_until!(
+        "orchestrator reports playing",
+        Duration::from_secs(4),
+        async { orchestrator.get_state().await.status == PlaybackStatus::Playing }
+    );
 
     // Loop: estado deseado + reflejo real en mpv.
     orchestrator.set_loop(true).await.expect("loop on");
@@ -454,10 +466,14 @@ async fn orchestrator_recovers_from_expired_url() {
     orchestrator.play(sample_track(8)).await.expect("play");
 
     // La recuperación debe terminar con el mismo track reproduciéndose.
-    wait_until!("recovered playback with the same track", Duration::from_secs(30), async {
-        let state = orchestrator.get_state().await;
-        state.current.is_some() && state.duration_seconds > 7.0 && state.position_seconds > 0.0
-    });
+    wait_until!(
+        "recovered playback with the same track",
+        Duration::from_secs(30),
+        async {
+            let state = orchestrator.get_state().await;
+            state.current.is_some() && state.duration_seconds > 7.0 && state.position_seconds > 0.0
+        }
+    );
 
     assert!(
         fixture.resolve_calls() >= 2,
@@ -505,14 +521,20 @@ async fn orchestrator_restores_playback_after_mpv_restart() {
     });
 
     // El track se recarga y se reanuda la posición.
-    wait_until!("track reloaded after reconnect", Duration::from_secs(20), async {
-        orchestrator.get_state().await.current.is_some()
-    });
+    wait_until!(
+        "track reloaded after reconnect",
+        Duration::from_secs(20),
+        async { orchestrator.get_state().await.current.is_some() }
+    );
 
-    wait_until!("position restored near where it was", Duration::from_secs(20), async {
-        let position = orchestrator.get_state().await.position_seconds;
-        position > 0.5 && (position - before).abs() < 6.0
-    });
+    wait_until!(
+        "position restored near where it was",
+        Duration::from_secs(20),
+        async {
+            let position = orchestrator.get_state().await.position_seconds;
+            position > 0.5 && (position - before).abs() < 6.0
+        }
+    );
 
     orchestrator.shutdown().await;
 }

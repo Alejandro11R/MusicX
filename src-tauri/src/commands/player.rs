@@ -26,12 +26,19 @@ pub async fn health(
     // mpv health: the supervisor reports whether the IPC socket is alive.
     let mpv_ok = orchestrator.is_connected();
 
-    // yt-dlp health: check if binary exists and runs.
-    let yt_dlp_ok = tokio::process::Command::new("yt-dlp")
-        .arg("--version")
-        .output()
+    // yt-dlp health: check if binary exists and runs within a bounded timeout.
+    let mut cmd = tokio::process::Command::new("yt-dlp");
+    cmd.arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+
+    let yt_dlp_ok = tokio::time::timeout(std::time::Duration::from_secs(5), cmd.status())
         .await
-        .map(|output| output.status.success())
+        .map(|res| res.map(|status| status.success()).unwrap_or(false))
         .unwrap_or(false);
 
     Ok(HealthStatus {

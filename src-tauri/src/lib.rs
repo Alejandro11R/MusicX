@@ -107,54 +107,81 @@ pub fn run() {
             }
 
             if let Some(icon) = app.default_window_icon().cloned() {
-                let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Salir de Cadence", true, None::<&str>)?;
-                let toggle_i = tauri::menu::MenuItem::with_id(app, "toggle", "Mostrar / Ocultar", true, None::<&str>)?;
-                let next_i = tauri::menu::MenuItem::with_id(app, "next", "Siguiente tema (Next)", true, None::<&str>)?;
-                let play_pause_i = tauri::menu::MenuItem::with_id(app, "play_pause", "Play / Pausa", true, None::<&str>)?;
-                let menu = tauri::menu::Menu::with_items(app, &[&toggle_i, &play_pause_i, &next_i, &quit_i])?;
+                let quit_i = tauri::menu::MenuItem::with_id(
+                    app,
+                    "quit",
+                    "Salir de Cadence",
+                    true,
+                    None::<&str>,
+                )?;
+                let toggle_i = tauri::menu::MenuItem::with_id(
+                    app,
+                    "toggle",
+                    "Mostrar / Ocultar",
+                    true,
+                    None::<&str>,
+                )?;
+                let next_i = tauri::menu::MenuItem::with_id(
+                    app,
+                    "next",
+                    "Siguiente tema (Next)",
+                    true,
+                    None::<&str>,
+                )?;
+                let play_pause_i = tauri::menu::MenuItem::with_id(
+                    app,
+                    "play_pause",
+                    "Play / Pausa",
+                    true,
+                    None::<&str>,
+                )?;
+                let menu = tauri::menu::Menu::with_items(
+                    app,
+                    &[&toggle_i, &play_pause_i, &next_i, &quit_i],
+                )?;
 
                 let _tray = tauri::tray::TrayIconBuilder::new()
                     .icon(icon)
                     .menu(&menu)
                     .show_menu_on_left_click(false)
-                    .on_menu_event(|app, event| {
-                        match event.id.as_ref() {
-                            "quit" => {
-                                app.exit(0);
-                            }
-                            "toggle" => {
-                                if let Some(window) = app.get_webview_window("main") {
-                                    if window.is_visible().unwrap_or(false) {
-                                        let _ = window.hide();
-                                    } else {
-                                        let _ = window.show();
-                                        let _ = window.set_focus();
-                                    }
-                                }
-                            }
-                            "play_pause" => {
-                                if let Some(orchestrator) = app.try_state::<Arc<PlayerOrchestrator>>() {
-                                    let orch = orchestrator.inner().clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        let state = orch.get_state().await;
-                                        if state.status == crate::models::player_state::PlaybackStatus::Playing {
-                                            let _ = orch.pause().await;
-                                        } else {
-                                            let _ = orch.resume().await;
-                                        }
-                                    });
-                                }
-                            }
-                            "next" => {
-                                if let Some(orchestrator) = app.try_state::<Arc<PlayerOrchestrator>>() {
-                                    let orch = orchestrator.inner().clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        let _ = orch.next().await;
-                                    });
-                                }
-                            }
-                            _ => {}
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "quit" => {
+                            app.exit(0);
                         }
+                        "toggle" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                        "play_pause" => {
+                            if let Some(orchestrator) = app.try_state::<Arc<PlayerOrchestrator>>() {
+                                let orch = orchestrator.inner().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let state = orch.get_state().await;
+                                    if state.status
+                                        == crate::models::player_state::PlaybackStatus::Playing
+                                    {
+                                        let _ = orch.pause().await;
+                                    } else {
+                                        let _ = orch.resume().await;
+                                    }
+                                });
+                            }
+                        }
+                        "next" => {
+                            if let Some(orchestrator) = app.try_state::<Arc<PlayerOrchestrator>>() {
+                                let orch = orchestrator.inner().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = orch.next().await;
+                                });
+                            }
+                        }
+                        _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {
                         if let tauri::tray::TrayIconEvent::Click {

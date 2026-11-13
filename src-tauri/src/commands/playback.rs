@@ -138,33 +138,25 @@ pub async fn set_speed(
 }
 
 #[tauri::command]
-pub async fn start_focus(
-    focus: tauri::State<'_, Arc<FocusEngine>>,
-) -> Result<(), CadenceError> {
+pub async fn start_focus(focus: tauri::State<'_, Arc<FocusEngine>>) -> Result<(), CadenceError> {
     focus.start().await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn pause_focus(
-    focus: tauri::State<'_, Arc<FocusEngine>>,
-) -> Result<(), CadenceError> {
+pub async fn pause_focus(focus: tauri::State<'_, Arc<FocusEngine>>) -> Result<(), CadenceError> {
     focus.pause().await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn reset_focus(
-    focus: tauri::State<'_, Arc<FocusEngine>>,
-) -> Result<(), CadenceError> {
+pub async fn reset_focus(focus: tauri::State<'_, Arc<FocusEngine>>) -> Result<(), CadenceError> {
     focus.reset().await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn skip_focus(
-    focus: tauri::State<'_, Arc<FocusEngine>>,
-) -> Result<(), CadenceError> {
+pub async fn skip_focus(focus: tauri::State<'_, Arc<FocusEngine>>) -> Result<(), CadenceError> {
     focus.skip().await;
     Ok(())
 }
@@ -192,6 +184,8 @@ pub async fn set_focus_durations(
     short_break_secs: u32,
     long_break_secs: u32,
 ) -> Result<(), CadenceError> {
-    focus.set_durations(focus_secs, short_break_secs, long_break_secs).await;
+    focus
+        .set_durations(focus_secs, short_break_secs, long_break_secs)
+        .await;
     Ok(())
 }

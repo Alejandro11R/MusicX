@@ -83,6 +83,12 @@ pub struct LyricsCache {
     dir: PathBuf,
 }
 
+impl Default for LyricsCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LyricsCache {
     pub fn new() -> Self {
         let dir = cache_root().join("lyrics");
@@ -94,6 +100,7 @@ impl LyricsCache {
     }
 
     #[cfg(test)]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     pub(super) fn isolated(dir: PathBuf) -> Self {
         std::fs::create_dir_all(&dir).unwrap();
         Self {

@@ -218,9 +218,7 @@ impl LyricsService {
                 Ok(Some(doc)) => doc,
                 fallback => {
                     // Absence is definitive only when every attempted lookup succeeded.
-                    if let Err(error) = exact {
-                        return Err(error);
-                    }
+                    exact?;
                     fallback?;
                     LyricsDoc::empty(&request.track_id)
                 }
@@ -331,7 +329,48 @@ fn sidecar_for(audio: &Path) -> Option<PathBuf> {
     None
 }
 
+#[allow(clippy::chunks_exact_to_as_chunks)]
+async fn read_text_capped(path: &Path) -> Result<String, CadenceError> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|error| CadenceError::Lyrics {
+            message: format!("lyrics metadata: {error}"),
+        })?;
+    if metadata.len() > 512 * 1024 {
+        return Err(CadenceError::Lyrics {
+            message: "lyrics file too large".into(),
+        });
+    }
+
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|error| CadenceError::Lyrics {
+            message: format!("lyrics read: {error}"),
+        })?;
+
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return Ok(String::from_utf8_lossy(&bytes[3..]).into_owned());
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        return Ok(String::from_utf16_lossy(&units));
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect();
+        return Ok(String::from_utf16_lossy(&units));
+    }
+
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::unused_io_amount)]
 mod tests {
     use super::*;
     use std::collections::VecDeque;
@@ -576,43 +615,4 @@ mod tests {
         assert_eq!(doc.lines[0].text, "Local line");
         assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
     }
-}
-
-async fn read_text_capped(path: &Path) -> Result<String, CadenceError> {
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(|error| CadenceError::Lyrics {
-            message: format!("lyrics metadata: {error}"),
-        })?;
-    if metadata.len() > 512 * 1024 {
-        return Err(CadenceError::Lyrics {
-            message: "lyrics file too large".into(),
-        });
-    }
-
-    let bytes = tokio::fs::read(path)
-        .await
-        .map_err(|error| CadenceError::Lyrics {
-            message: format!("lyrics read: {error}"),
-        })?;
-
-    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        return Ok(String::from_utf8_lossy(&bytes[3..]).into_owned());
-    }
-    if bytes.starts_with(&[0xFF, 0xFE]) {
-        let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
-        return Ok(String::from_utf16_lossy(&units));
-    }
-    if bytes.starts_with(&[0xFE, 0xFF]) {
-        let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
-            .collect();
-        return Ok(String::from_utf16_lossy(&units));
-    }
-
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }

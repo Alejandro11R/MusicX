@@ -122,14 +122,31 @@ pub enum FrontendError {
 impl From<CadenceError> for FrontendError {
     fn from(err: CadenceError) -> Self {
         match err {
-            CadenceError::YtDlpAuthRequired { video_id } => FrontendError::YtDlpAuthRequired { video_id },
-            CadenceError::YtDlpNoAudioStream { video_id } => FrontendError::YtDlpNoAudioStream { video_id },
+            CadenceError::YtDlpAuthRequired { video_id } => {
+                FrontendError::YtDlpAuthRequired { video_id }
+            }
+            CadenceError::YtDlpNoAudioStream { video_id } => {
+                FrontendError::YtDlpNoAudioStream { video_id }
+            }
             CadenceError::YtDlpTimeout => FrontendError::YtDlpTimeout,
-            CadenceError::YtDlpSpawn(_) | CadenceError::YtDlpIo(_) => FrontendError::YtDlpUnavailable,
-            CadenceError::YtDlpExecution { .. } | CadenceError::YtDlpParse(_) => FrontendError::Unknown { message: err.user_message().to_string() },
-            CadenceError::MpvConnectionClosed | CadenceError::MpvSocketTimeout(_) => FrontendError::MpvConnectionLost,
-            CadenceError::MpvCommand { command, message } => FrontendError::MpvCommandRejected { command, reason: message },
-            CadenceError::MpvSpawn(_) | CadenceError::MpvIo(_) | CadenceError::MpvSerialize(_) => FrontendError::MpvConnectionLost,
+            CadenceError::YtDlpSpawn(_) | CadenceError::YtDlpIo(_) => {
+                FrontendError::YtDlpUnavailable
+            }
+            CadenceError::YtDlpExecution { .. } | CadenceError::YtDlpParse(_) => {
+                FrontendError::Unknown {
+                    message: err.user_message().to_string(),
+                }
+            }
+            CadenceError::MpvConnectionClosed | CadenceError::MpvSocketTimeout(_) => {
+                FrontendError::MpvConnectionLost
+            }
+            CadenceError::MpvCommand { command, message } => FrontendError::MpvCommandRejected {
+                command,
+                reason: message,
+            },
+            CadenceError::MpvSpawn(_) | CadenceError::MpvIo(_) | CadenceError::MpvSerialize(_) => {
+                FrontendError::MpvConnectionLost
+            }
             CadenceError::QueueError { message } => FrontendError::Unknown { message },
             CadenceError::Lyrics { message } => FrontendError::Unknown { message },
         }

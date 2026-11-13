@@ -36,6 +36,11 @@ Para activar la máxima protección en el repositorio de GitHub:
 - **Permisos estrictos de solo lectura**: `permissions: contents: read`.
 - Los forks externos nunca tienen acceso a los secrets del repositorio ni a tokens de escritura.
 - Las dependencias de Node se instalan con `npm ci --ignore-scripts` para neutralizar cualquier script oculto.
+- La integración continua ejecuta `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, tests unitarios, tests de integración con `mpv` real (`--test integration -- --include-ignored --test-threads=1`) y compilación Tauri sin empaquetador (`npm run tauri build -- --no-bundle`).
+
+### C. WebView CSP y Transporte Local IPC
+- **Content Security Policy activa** (`src-tauri/tauri.conf.json`): restringe `default-src 'self'`, `script-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, permitiendo únicamente orígenes locales (`self`, `ipc:`, `http://ipc.localhost`, `asset:`, `http://asset.localhost`, `blob:`, `data:`) y miniaturas HTTPS de YouTube (`https://i.ytimg.com`, `https://*.ytimg.com`). Ver detalle en [`docs/LOCAL-TRANSPORT-STABILITY.md`](LOCAL-TRANSPORT-STABILITY.md).
+- **Aislamiento de sockets Unix locales** (`src-tauri/src/services/local_transport.rs`, `control_server.rs`, `mpv_event.rs`, `bin/cli.rs`): los sockets de control y sesiones de `mpv` se crean dentro de directorios privados por usuario (`0700`, `cadence-<uid>`) con sockets `0600`, verificación anti-symlink/propietario, límite de encuadre de control de `16 KiB` (`MAX_CONTROL_LINE_BYTES`, CLI limitado a `64 KiB`) y apagado explícito del `Child` propietario sin archivos `.pid` globales ni escaneos de `/proc`.
 
 ---
 

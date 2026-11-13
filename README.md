@@ -13,7 +13,7 @@ No heavy library, no algorithm feeds, no distractions. Just search â†’ listen â†
 - **Apple Music-Style Immersive Player:** Fullscreen cinematic player (`I`) with 50/50 symmetrical layout, responsive hero album art, dynamic ambient backdrop from cover art palette, large scale typography, and interactive transport controls.
 - **Live Synced Lyrics Engine (LRCLib & Local LRC):** Sub-second timestamp synchronization at 60 fps (`L`) without IPC polling overhead, smart heuristics for YouTube track matching, multi-tier caching (memory + disk + negative cache), manual lyric search fallback, and interactive line-seeking.
 - **Cadence CLI Client:** Complete command-line interface (`cadence-cli`) to play, pause, queue, switch presets, and manage focus sessions directly from your terminal or tmux.
-- **Cross-Platform (Linux & Windows):** Native IPC abstraction using Unix Domain Sockets on Linux/macOS and Win32 Named Pipes on Windows (`\\.\pipe\cadence-mpv-*`).
+- **Cross-Platform (Linux & Windows):** Native IPC abstraction using private per-user Unix Domain Sockets on Linux/macOS (`$XDG_RUNTIME_DIR/cadence-<uid>/control.sock` or `/tmp/cadence-<uid>/control.sock`) and Win32 Named Pipes on Windows (`\\.\pipe\cadence-mpv-*`).
 - **Event-Driven Concurrency:** High-performance Rust backend powered by `PlayerOrchestrator` and `mpv` IPC event loop with zero-latency state subscriptions.
 - **Liquid Glass UI:** Modern translucent aesthetic with ambient blur, responsive progress scrubbers, volume controls, and track history.
 - **Keyboard-First & System Tray:** Complete control without leaving your flow (`Space`, `N`, `P`, `Q`, `F`, `M`, `L`, arrows, `/`) plus tray integration.
@@ -94,5 +94,7 @@ npm run cli -- focus skip
 - See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for architectural decisions, concurrency model (`PlayerOrchestrator`), IPC socket management, lyrics service, and incident postmortems.
 - See [docs/LYRICS-ARCHITECTURE.md](docs/LYRICS-ARCHITECTURE.md) for the complete technical specification of the lyrics synchronization engine, LRCLib client, cache tiers, and 60 fps rendering budget.
 - See [docs/UI.md](docs/UI.md) for the visual identity, Liquid Glass specifications, Apple Music Immersive Mode, typography, motion, and interaction guidelines.
+- See [docs/SECURITY.md](docs/SECURITY.md) for supply-chain controls, WebView CSP policy, and local IPC transport hardening.
+- See [docs/PLAYBACK-STABILITY.md](docs/PLAYBACK-STABILITY.md), [docs/LYRICS-STABILITY.md](docs/LYRICS-STABILITY.md), [docs/FOCUS-STABILITY.md](docs/FOCUS-STABILITY.md), [docs/FRONTEND-STABILITY.md](docs/FRONTEND-STABILITY.md), and [docs/LOCAL-TRANSPORT-STABILITY.md](docs/LOCAL-TRANSPORT-STABILITY.md) for subsystem stabilization contracts and verification boundaries.
 - See [docs/AUDIT-2026-10-28.md](docs/AUDIT-2026-10-28.md) for the comprehensive architecture and performance audit.
 - See [REFACTOR_PLAN.md](REFACTOR_PLAN.md) for the roadmap history, auditing milestones, and completed refactoring phases.

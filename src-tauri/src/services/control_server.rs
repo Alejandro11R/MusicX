@@ -3,10 +3,10 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
-#[cfg(unix)]
-use tokio::net::UnixListener;
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::ServerOptions;
+#[cfg(unix)]
+use tokio::net::UnixListener;
 
 use crate::models::player_state::AudioPreset;
 use crate::services::focus::FocusEngine;
@@ -67,7 +67,10 @@ mod transport_tests {
                     .unwrap()
                     .as_nanos()
             ));
-            std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&path)
+                .unwrap();
             Self(path)
         }
     }
@@ -351,7 +354,8 @@ impl ControlServer {
 
                     if let Ok(mut bytes) = serde_json::to_vec(&response) {
                         bytes.push(b'\n');
-                        if writer.write_all(&bytes).await.is_err() || writer.flush().await.is_err() {
+                        if writer.write_all(&bytes).await.is_err() || writer.flush().await.is_err()
+                        {
                             break;
                         }
                     }
@@ -384,21 +388,19 @@ impl ControlServer {
                     "focus": focus_state,
                 }))
             }
-            ControlRequest::Play { query } => {
-                match orchestrator.search(&query, 1).await {
-                    Ok(results) => {
-                        if let Some(first) = results.into_iter().next() {
-                            match orchestrator.play(first.clone()).await {
-                                Ok(()) => ControlResponse::success(json!({ "playing": first })),
-                                Err(err) => ControlResponse::err(err.to_string()),
-                            }
-                        } else {
-                            ControlResponse::err("No tracks found for query")
+            ControlRequest::Play { query } => match orchestrator.search(&query, 1).await {
+                Ok(results) => {
+                    if let Some(first) = results.into_iter().next() {
+                        match orchestrator.play(first.clone()).await {
+                            Ok(()) => ControlResponse::success(json!({ "playing": first })),
+                            Err(err) => ControlResponse::err(err.to_string()),
                         }
+                    } else {
+                        ControlResponse::err("No tracks found for query")
                     }
-                    Err(err) => ControlResponse::err(err.to_string()),
                 }
-            }
+                Err(err) => ControlResponse::err(err.to_string()),
+            },
             ControlRequest::Pause => match orchestrator.pause().await {
                 Ok(()) => ControlResponse::success(json!({ "paused": true })),
                 Err(err) => ControlResponse::err(err.to_string()),

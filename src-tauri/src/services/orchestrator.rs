@@ -108,7 +108,9 @@ impl TrackResolver {
         if video_id == "local:/blocked.wav" {
             if let Some(gate) = &self.gate {
                 gate.entered.notify_one();
-                gate.release.acquire().await.expect("gate open").forget();
+                if let Ok(permit) = gate.release.acquire().await {
+                    permit.forget();
+                }
             }
         }
         #[cfg(test)]

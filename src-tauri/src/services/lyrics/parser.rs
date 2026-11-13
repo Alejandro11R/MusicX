@@ -30,7 +30,9 @@ pub fn parse_lrc(raw: &str) -> ParsedLrc {
 
         // Consume todos los `[...]` iniciales: timestamps y metadatos.
         while let Some(after_open) = cursor.strip_prefix('[') {
-            let Some(close) = after_open.find(']') else { break };
+            let Some(close) = after_open.find(']') else {
+                break;
+            };
             let inner = &after_open[..close];
 
             if let Some(ms) = parse_timestamp(inner) {
@@ -79,9 +81,7 @@ pub fn parse_lrc(raw: &str) -> ParsedLrc {
                     .iter()
                     .map(|word| LyricWord {
                         time_ms: (word.time_ms as i64 + shift).max(0) as u64,
-                        end_ms: word
-                            .end_ms
-                            .map(|end| (end as i64 + shift).max(0) as u64),
+                        end_ms: word.end_ms.map(|end| (end as i64 + shift).max(0) as u64),
                         text: word.text.clone(),
                     })
                     .collect()
@@ -105,9 +105,7 @@ pub fn parse_lrc(raw: &str) -> ParsedLrc {
             if let Some(words) = line.words.as_mut() {
                 for word in words {
                     word.time_ms = (word.time_ms as i64 + offset).max(0) as u64;
-                    word.end_ms = word
-                        .end_ms
-                        .map(|end| (end as i64 + offset).max(0) as u64);
+                    word.end_ms = word.end_ms.map(|end| (end as i64 + offset).max(0) as u64);
                 }
             }
             parsed.lines.push(line);

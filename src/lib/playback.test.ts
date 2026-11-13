@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clamp,
   formatDuration,
+  formatHealthDiagnostic,
   safeDuration,
   safePosition,
   seekTarget,
@@ -98,5 +99,20 @@ describe("formatDuration", () => {
     expect(formatDuration(-1)).toBe("0:00");
     expect(formatDuration(Number.NaN)).toBe("0:00");
     expect(formatDuration(Number.POSITIVE_INFINITY)).toBe("0:00");
+  });
+});
+
+describe("formatHealthDiagnostic", () => {
+  it("devuelve mensajes accionables por cada estado de dependencias", () => {
+    expect(formatHealthDiagnostic({ mpv: true, yt_dlp: true })).toBeNull();
+    expect(formatHealthDiagnostic({ mpv: false, yt_dlp: false })).toBe(
+      "mpv y yt-dlp no están disponibles en PATH. Instálalos y reinicia Cadence.",
+    );
+    expect(formatHealthDiagnostic({ mpv: false, yt_dlp: true })).toBe(
+      "mpv no está disponible en PATH. Instálalo y reinicia Cadence.",
+    );
+    expect(formatHealthDiagnostic({ mpv: true, yt_dlp: false })).toBe(
+      "yt-dlp no está disponible en PATH. Instálalo para buscar y reproducir desde YouTube.",
+    );
   });
 });

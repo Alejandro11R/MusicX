@@ -1,15 +1,16 @@
+use serde_json::{json, Value};
 use std::env;
 use std::process::exit;
-use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-use tokio::net::UnixStream;
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::ClientOptions;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+use tokio::net::UnixStream;
 
 fn print_help() {
-    println!(r#"🎵 Cadence CLI — Lightning-fast music & focus controller
+    println!(
+        r#"🎵 Cadence CLI — Lightning-fast music & focus controller
 
 Uso:
   cadence [comando] [argumentos]
@@ -37,7 +38,8 @@ Focus & Pomodoro:
 Cola de Reproducción:
   queue                    Lista las canciones en la cola
   queue clear              Vacía la cola
-"#);
+"#
+    );
 }
 
 #[tokio::main]
@@ -198,17 +200,36 @@ fn format_cli_output(cmd: &str, data: &Value) {
                 println!("🎶 Pista        : {} - {}", title, artist);
                 let pos = player["position_seconds"].as_f64().unwrap_or(0.0) as u32;
                 let dur = player["duration_seconds"].as_f64().unwrap_or(0.0) as u32;
-                println!("⏱️  Tiempo       : {:02}:{:02} / {:02}:{:02}", pos / 60, pos % 60, dur / 60, dur % 60);
+                println!(
+                    "⏱️  Tiempo       : {:02}:{:02} / {:02}:{:02}",
+                    pos / 60,
+                    pos % 60,
+                    dur / 60,
+                    dur % 60
+                );
             }
-            println!("🔊 Volumen      : {}%", player["volume"].as_f64().unwrap_or(100.0) as u32);
-            println!("🎛️  Preset Audio : {}", player["audio_preset"].as_str().unwrap_or("normal"));
-            println!("⚡ Velocidad    : {:.2}x", player["speed"].as_f64().unwrap_or(1.0));
+            println!(
+                "🔊 Volumen      : {}%",
+                player["volume"].as_f64().unwrap_or(100.0) as u32
+            );
+            println!(
+                "🎛️  Preset Audio : {}",
+                player["audio_preset"].as_str().unwrap_or("normal")
+            );
+            println!(
+                "⚡ Velocidad    : {:.2}x",
+                player["speed"].as_f64().unwrap_or(1.0)
+            );
             println!("──────────────────────────────────────────");
             let f_phase = focus["phase"].as_str().unwrap_or("idle");
             let f_rem = focus["remaining_seconds"].as_u64().unwrap_or(0) as u32;
             let f_run = focus["is_running"].as_bool().unwrap_or(false);
             let f_comp = focus["sessions_completed"].as_u64().unwrap_or(0);
-            println!("🎯 Focus Phase  : {} ({})", f_phase, if f_run { "Activo" } else { "Pausado" });
+            println!(
+                "🎯 Focus Phase  : {} ({})",
+                f_phase,
+                if f_run { "Activo" } else { "Pausado" }
+            );
             println!("⏳ Tiempo Focus : {:02}:{:02}", f_rem / 60, f_rem % 60);
             println!("🏆 Sesiones     : {}", f_comp);
         }
@@ -216,7 +237,15 @@ fn format_cli_output(cmd: &str, data: &Value) {
             if let Some(track) = data.get("playing") {
                 let title = track["title"].as_str().unwrap_or("");
                 let artist = track["artist"].as_str().unwrap_or("");
-                println!("🎶 Reproduciendo ahora: {} {}", title, if artist.is_empty() { "".to_string() } else { format!("— {}", artist) });
+                println!(
+                    "🎶 Reproduciendo ahora: {} {}",
+                    title,
+                    if artist.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!("— {}", artist)
+                    }
+                );
             } else {
                 println!("✅ Comando play enviado");
             }
@@ -231,7 +260,16 @@ fn format_cli_output(cmd: &str, data: &Value) {
                         let t = &item["track"];
                         let title = t["title"].as_str().unwrap_or("");
                         let artist = t["artist"].as_str().unwrap_or("");
-                        println!("  {}. {} {}", i + 1, title, if artist.is_empty() { "".to_string() } else { format!("— {}", artist) });
+                        println!(
+                            "  {}. {} {}",
+                            i + 1,
+                            title,
+                            if artist.is_empty() {
+                                "".to_string()
+                            } else {
+                                format!("— {}", artist)
+                            }
+                        );
                     }
                 }
             } else {
@@ -239,7 +277,10 @@ fn format_cli_output(cmd: &str, data: &Value) {
             }
         }
         _ => {
-            println!("✅ {}", serde_json::to_string_pretty(data).unwrap_or_default());
+            println!(
+                "✅ {}",
+                serde_json::to_string_pretty(data).unwrap_or_default()
+            );
         }
     }
 }

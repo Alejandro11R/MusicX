@@ -235,7 +235,7 @@ impl YtDlpService {
     /// Busca en YouTube y retorna resultados.
     pub async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchResult>, CadenceError> {
         let cache_key = format!("search:{}:{}", query, limit);
-        
+
         // Check cache first
         if let Some(cached) = self.search_cache.get(&cache_key) {
             if !cached.is_empty() {
@@ -244,9 +244,13 @@ impl YtDlpService {
             }
         }
 
-        let _permit = self.semaphore.acquire().await.map_err(|_| CadenceError::YtDlpExecution {
-            message: "Semaphore closed".to_string(),
-        })?;
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| CadenceError::YtDlpExecution {
+                message: "Semaphore closed".to_string(),
+            })?;
 
         let mut cb = self.circuit_breaker.lock().await;
         if !cb.can_execute() {
@@ -263,7 +267,9 @@ impl YtDlpService {
         } else {
             format!("ytsearch{limit}:{trimmed}")
         };
-        let output = self.run_yt_dlp_search(&["--flat-playlist", "-j", &search_spec]).await;
+        let output = self
+            .run_yt_dlp_search(&["--flat-playlist", "-j", &search_spec])
+            .await;
 
         let mut cb = self.circuit_breaker.lock().await;
         match &output {
@@ -295,9 +301,13 @@ impl YtDlpService {
             return Ok(url);
         }
 
-        let _permit = self.semaphore.acquire().await.map_err(|_| CadenceError::YtDlpExecution {
-            message: "Semaphore closed".to_string(),
-        })?;
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| CadenceError::YtDlpExecution {
+                message: "Semaphore closed".to_string(),
+            })?;
 
         let mut cb = self.circuit_breaker.lock().await;
         if !cb.can_execute() {
@@ -308,13 +318,16 @@ impl YtDlpService {
         drop(cb);
 
         let watch_url = format!("https://www.youtube.com/watch?v={video_id}");
-        let output = self.run_yt_dlp_resolve(&["-f", "bestaudio", "-g", &watch_url]).await;
+        let output = self
+            .run_yt_dlp_resolve(&["-f", "bestaudio", "-g", &watch_url])
+            .await;
 
         let mut cb = self.circuit_breaker.lock().await;
         match &output {
             Ok(url) => {
                 cb.record_success();
-                self.cache.insert(video_id.to_string(), CacheEntry::new(url.clone()));
+                self.cache
+                    .insert(video_id.to_string(), CacheEntry::new(url.clone()));
                 Ok(url.clone())
             }
             Err(_) => {
@@ -381,11 +394,9 @@ impl YtDlpService {
 
         let results = entries
             .into_iter()
-            .filter(|entry| {
-                match entry.ie_key.as_deref() {
-                    Some("Youtube") | None => true,
-                    Some(_) => false,
-                }
+            .filter(|entry| match entry.ie_key.as_deref() {
+                Some("Youtube") | None => true,
+                Some(_) => false,
             })
             .map(SearchResult::from)
             .collect();
@@ -437,7 +448,8 @@ impl YtDlpService {
 
         if url.is_empty() {
             return Err(CadenceError::YtDlpNoAudioStream {
-                video_id: args.iter()
+                video_id: args
+                    .iter()
                     .find(|a| a.starts_with("https://www.youtube.com/watch?v="))
                     .and_then(|a| a.split("v=").nth(1))
                     .and_then(|a| a.split('&').next())
@@ -451,15 +463,19 @@ impl YtDlpService {
 
     fn annotate_execution_failure(&self, stderr: String, args: &[&str]) -> CadenceError {
         if stderr.to_lowercase().contains("sign in") {
-            let video_id = args.iter()
+            let video_id = args
+                .iter()
                 .find(|a| a.starts_with("https://www.youtube.com/watch?v="))
                 .and_then(|a| a.split("v=").nth(1))
                 .and_then(|a| a.split('&').next())
                 .unwrap_or("unknown")
                 .to_string();
             CadenceError::YtDlpAuthRequired { video_id }
-        } else if stderr.to_lowercase().contains("no audio") || stderr.to_lowercase().contains("no formats") {
-            let video_id = args.iter()
+        } else if stderr.to_lowercase().contains("no audio")
+            || stderr.to_lowercase().contains("no formats")
+        {
+            let video_id = args
+                .iter()
                 .find(|a| a.starts_with("https://www.youtube.com/watch?v="))
                 .and_then(|a| a.split("v=").nth(1))
                 .and_then(|a| a.split('&').next())
@@ -497,8 +513,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires live YouTube network access and yt-dlp"]
     async fn search_returns_results_shaped_as_search_result() {
-        let results = search("Imagine Dragons Believer", 1).await.expect("search should succeed");
+        let results = search("Imagine Dragons Believer", 1)
+            .await
+            .expect("search should succeed");
         assert_eq!(results.len(), 1);
         let first = &results[0];
         assert!(!first.id.is_empty());
@@ -517,7 +536,10 @@ mod tests {
             ie_key: Some("Youtube".to_string()),
         };
         let result = SearchResult::from(entry);
-        assert_eq!(result.thumbnail_url, "https://i.ytimg.com/vi/abc123/mqdefault.jpg");
+        assert_eq!(
+            result.thumbnail_url,
+            "https://i.ytimg.com/vi/abc123/mqdefault.jpg"
+        );
     }
 
     #[test]
@@ -548,20 +570,29 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live YouTube network access and yt-dlp"]
     async fn search_respects_the_requested_limit() {
-        let results = search("Linkin Park Numb", 3).await.expect("search should succeed");
+        let results = search("Linkin Park Numb", 3)
+            .await
+            .expect("search should succeed");
         assert_eq!(results.len(), 3);
     }
 
     #[tokio::test]
+    #[ignore = "requires live YouTube network access and yt-dlp"]
     async fn resolve_audio_returns_a_direct_stream_url() {
-        let results = search("Imagine Dragons Believer", 1).await.expect("search should succeed");
+        let results = search("Imagine Dragons Believer", 1)
+            .await
+            .expect("search should succeed");
         let video_id = &results[0].id;
-        let url = resolve_audio(video_id).await.expect("resolve_audio should succeed");
+        let url = resolve_audio(video_id)
+            .await
+            .expect("resolve_audio should succeed");
         assert!(url.starts_with("https://"));
     }
 
     #[tokio::test]
+    #[ignore = "requires live YouTube network access and yt-dlp"]
     async fn resolve_audio_fails_for_a_nonexistent_video_id() {
         let result = resolve_audio("this-id-does-not-exist-000").await;
         assert!(result.is_err());
@@ -571,24 +602,33 @@ mod tests {
     fn recognizes_sign_in_required_as_a_distinct_error() {
         let service = YtDlpService::new();
         let raw = "ERROR: [youtube] abc123: Sign in to confirm your age.";
-        let classified = service.annotate_execution_failure(raw.to_string(), &["https://www.youtube.com/watch?v=abc123"]);
-        assert!(matches!(classified, CadenceError::YtDlpAuthRequired { video_id } if video_id == "abc123"));
+        let classified = service.annotate_execution_failure(
+            raw.to_string(),
+            &["https://www.youtube.com/watch?v=abc123"],
+        );
+        assert!(
+            matches!(classified, CadenceError::YtDlpAuthRequired { video_id } if video_id == "abc123")
+        );
     }
 
     #[test]
     fn leaves_other_execution_failures_unclassified() {
         let service = YtDlpService::new();
         let raw = "ERROR: [youtube] abc123: Video unavailable.";
-        let classified = service.annotate_execution_failure(raw.to_string(), &["https://www.youtube.com/watch?v=abc123"]);
+        let classified = service.annotate_execution_failure(
+            raw.to_string(),
+            &["https://www.youtube.com/watch?v=abc123"],
+        );
         assert!(matches!(classified, CadenceError::YtDlpExecution { .. }));
     }
 
     #[tokio::test]
+    #[ignore = "requires live YouTube network access and yt-dlp"]
     async fn cache_works_for_resolve_audio() {
         let service = YtDlpService::new();
         let results = search("Imagine Dragons Believer", 1).await.expect("search");
         let video_id = &results[0].id;
-        
+
         // Primera llamada - cache miss
         let url1 = service.resolve_audio(video_id).await.expect("resolve 1");
         // Segunda llamada - cache hit
@@ -623,7 +663,10 @@ mod tests {
     #[test]
     fn ttl_is_zero_for_already_expired_urls() {
         let now = 1_000_000;
-        let url = format!("https://rr1.googlevideo.com/videoplayback?expire={}", now - 10);
+        let url = format!(
+            "https://rr1.googlevideo.com/videoplayback?expire={}",
+            now - 10
+        );
         assert_eq!(ttl_from_url(&url, now), Duration::ZERO);
         // También si está dentro del margen de seguridad.
         let almost = format!("https://x.test/a?expire={}", now + 30);
@@ -683,7 +726,10 @@ mod tests {
             Some("dQw4w9WgXcQ".to_string())
         );
         // Búsquedas normales de texto deben retornar None
-        assert_eq!(extract_youtube_video_id("rick astley never gonna give you up"), None);
+        assert_eq!(
+            extract_youtube_video_id("rick astley never gonna give you up"),
+            None
+        );
         assert_eq!(extract_youtube_video_id("daft punk"), None);
         assert_eq!(extract_youtube_video_id(""), None);
     }

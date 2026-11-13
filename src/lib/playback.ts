@@ -58,3 +58,20 @@ export function formatDuration(totalSeconds: number): string {
   }
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
+
+/** Traduce el estado de `health()` en un diagnóstico accionable para el usuario. */
+export function formatHealthDiagnostic(health: {
+  mpv: boolean;
+  yt_dlp: boolean;
+}): string | null {
+  if (!health.mpv && !health.yt_dlp) {
+    return "mpv y yt-dlp no están disponibles en PATH. Instálalos y reinicia Cadence.";
+  }
+  if (!health.mpv) {
+    return "mpv no está disponible en PATH. Instálalo y reinicia Cadence.";
+  }
+  if (!health.yt_dlp) {
+    return "yt-dlp no está disponible en PATH. Instálalo para buscar y reproducir desde YouTube.";
+  }
+  return null;
+}

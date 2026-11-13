@@ -61,9 +61,13 @@ fn validate_chain(path: &Path) -> io::Result<()> {
 /// Canonical root is deliberately independent of USER, UID and TMPDIR.
 pub fn runtime_root() -> &'static Path {
     #[cfg(target_os = "linux")]
-    { Path::new("/tmp") }
+    {
+        Path::new("/tmp")
+    }
     #[cfg(target_os = "macos")]
-    { Path::new("/private/tmp") }
+    {
+        Path::new("/private/tmp")
+    }
 }
 
 pub fn runtime_dir(create: bool) -> io::Result<PathBuf> {
