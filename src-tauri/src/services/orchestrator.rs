@@ -111,6 +111,12 @@ impl TrackResolver {
                 gate.release.acquire().await.expect("gate open").forget();
             }
         }
+        #[cfg(test)]
+        if video_id == "local:/resolution-error.wav" {
+            return Err(CadenceError::QueueError {
+                message: "test resolution failure".into(),
+            });
+        }
         if video_id.starts_with("local:") {
             let path = video_id.trim_start_matches("local:");
             return Ok(path.to_string());
@@ -629,11 +635,17 @@ impl PlayerOrchestrator {
             return Ok(());
         };
         {
+            let mut pending = self.pending_queue_entry.write().await;
+            if !self.owns(intent) {
+                return Ok(());
+            }
+            *pending = entry_id.clone().map(|id| (intent, id));
+        }
+        {
             let _effects = self.effects.lock().await;
             if !self.owns(intent) {
                 return Ok(());
             }
-            *self.pending_queue_entry.write().await = entry_id.clone().map(|id| (intent, id));
             self.set_mode(PlayerMode::Loading).await;
         }
 
@@ -645,7 +657,7 @@ impl PlayerOrchestrator {
                     return Ok(());
                 }
                 *self.pending_queue_entry.write().await = None;
-                self.set_mode(PlayerMode::Stopped).await;
+                self.restore_loaded_mode(intent).await;
                 return Err(err);
             }
         };
@@ -891,7 +903,11 @@ impl PlayerOrchestrator {
                 None
             } else {
                 let current_idx = self.current_queue_index.read().await;
-                let prev_idx = match *current_idx {
+                let pending = self.pending_queue_entry.read().await;
+                let pending_idx = pending
+                    .as_ref()
+                    .and_then(|(_, id)| queue.iter().position(|item| item.id == *id));
+                let prev_idx = match pending_idx.or(*current_idx) {
                     Some(idx) if idx > 0 => idx - 1,
                     Some(_) | None => 0,
                 };
@@ -1600,6 +1616,154 @@ mod tests {
         assert_eq!(player.get_state().await.current.unwrap().title, "successor");
         assert_eq!(last_mode(&mut events), Some(PlayerMode::Playing));
         assert_eq!(player.get_queue().await.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn failed_resolution_retains_eof_and_reconnect_ownership() {
+        let player = fixture();
+        player.play(track("A")).await.unwrap();
+        player.add_to_queue(track("successor")).await;
+        let queue = player.get_queue().await;
+        let mut events = player.subscribe_events();
+        let mut failed = track("B");
+        failed.id = "local:/resolution-error.wav".into();
+        assert!(
+            matches!(player.play(failed).await, Err(CadenceError::QueueError { message })
+            if message == "test resolution failure")
+        );
+        assert_eq!(player.get_queue().await, queue);
+        assert_eq!(player.get_state().await.current.unwrap().title, "A");
+        let mode = last_mode(&mut events);
+        player.pause().await.unwrap();
+        player.restore_after_reconnect().await;
+        assert_eq!(
+            last_mode(&mut events),
+            Some(PlayerMode::Paused),
+            "retained audio must restore on reconnect"
+        );
+        player.resume().await.unwrap();
+        player.handle_end_file("eof".into(), None).await;
+        assert_eq!(player.get_state().await.current.unwrap().title, "successor");
+        assert_eq!(mode, Some(PlayerMode::Playing));
+        let mut ended = 0;
+        let mut started = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            match event {
+                OrchestratorEvent::TrackEnded { reason } => {
+                    assert_eq!(reason, "eof");
+                    ended += 1;
+                }
+                OrchestratorEvent::TrackStarted(t) => started.push(t.title),
+                _ => {}
+            }
+        }
+        assert_eq!(ended, 1);
+        assert_eq!(started, vec!["successor"]);
+    }
+
+    #[tokio::test]
+    async fn repeated_next_behind_load_ack_reaches_third_entry() {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (mpv, mut commands) = MpvPlayer::controlled_fake();
+            let mpv = Arc::new(mpv);
+            let player = Arc::new(PlayerOrchestrator::new(
+                PlaybackController::new(mpv.clone()),
+                TrackResolver::new(Arc::new(YtDlpService::new())),
+                mpv.subscribe_events(),
+                mpv.subscribe_status(),
+                None,
+            ));
+            for title in ["A", "B", "C"] {
+                player.add_to_queue(track(title)).await;
+            }
+            let mut events = player.subscribe_events();
+            let loading = player.play_queue_index(0);
+            tokio::pin!(loading);
+            let (_, reply) = tokio::select! {
+                result = &mut loading => panic!("load completed without ack: {result:?}"),
+                command = commands.recv() => command.unwrap(),
+            };
+            let first = player.next();
+            tokio::pin!(first);
+            tokio::select! {
+                result = &mut first => panic!("Next completed without ack: {result:?}"),
+                _ = std::future::ready(()) => {}
+            }
+            let second = player.next();
+            tokio::pin!(second);
+            tokio::select! {
+                result = &mut second => panic!("Next completed without ack: {result:?}"),
+                _ = std::future::ready(()) => {}
+            }
+            assert!(commands.try_recv().is_err());
+            reply.send(Ok(())).unwrap();
+            let acknowledge = async {
+                while let Some((_, reply)) = commands.recv().await {
+                    reply.send(Ok(())).unwrap();
+                }
+            };
+            tokio::select! {
+                results = async { tokio::join!(loading, first, second) } => {
+                    results.0.unwrap(); results.1.unwrap(); results.2.unwrap();
+                }
+                _ = acknowledge => panic!("command channel closed"),
+            }
+            assert_eq!(player.get_state().await.current.unwrap().title, "C");
+            assert_eq!(player.get_queue().await.len(), 3);
+            let mut started = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                if let OrchestratorEvent::TrackStarted(t) = event {
+                    started.push(t.title);
+                }
+            }
+            assert_eq!(started, vec!["C"]);
+        })
+        .await
+        .expect("load acknowledgement test timed out");
+    }
+
+    #[tokio::test]
+    async fn repeated_previous_uses_pending_selection() {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (player, gate) = gated_fixture();
+            for title in ["A", "B", "C", "D"] {
+                let mut item = track(title);
+                if title == "C" {
+                    item.id = "local:/blocked.wav".into();
+                }
+                player.add_to_queue(item).await;
+            }
+            player.play_queue_index(3).await.unwrap();
+            let first = player.previous();
+            tokio::pin!(first);
+            tokio::select! {
+                _ = &mut first => panic!("C must wait for resolution"),
+                _ = gate.entered.notified() => {}
+            }
+            let mut events = player.subscribe_events();
+            let second = player.previous();
+            tokio::pin!(second);
+            let selected_b = tokio::select! {
+                result = &mut second => { result.unwrap(); true },
+                _ = gate.entered.notified() => false,
+            };
+            gate.release.add_permits(2);
+            if !selected_b {
+                second.await.unwrap();
+            }
+            first.await.unwrap();
+            assert_eq!(player.get_state().await.current.unwrap().title, "B");
+            assert_eq!(player.get_queue().await.len(), 4);
+            let mut started = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                if let OrchestratorEvent::TrackStarted(t) = event {
+                    started.push(t.title);
+                }
+            }
+            assert_eq!(started, vec!["B"]);
+        })
+        .await
+        .expect("Previous resolution test timed out");
     }
 
     #[test]
