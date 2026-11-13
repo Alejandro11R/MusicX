@@ -49,6 +49,7 @@ import { ToastNotification, type ToastMessage } from "@/components/ui/ToastNotif
 import { InteractiveTimeline } from "@/components/ui/InteractiveTimeline";
 import { cn } from "@/lib/utils";
 import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
+import { LyricsCoordinator } from "./lib/async-ownership";
 import { extractDominantColor } from "@/lib/album-color";
 import {
   search,
@@ -1159,6 +1160,12 @@ function App() {
   const unlistenRef = useRef<(() => void) | null>(null);
   const seekGuardRef = useRef<{ target: number; at: number } | null>(null);
   const lyricsAttemptedTrackIdRef = useRef<string | null>(null);
+  const lyricsOwner = useRef(new LyricsCoordinator<LyricsDoc>(setLyricsDoc, setIsLyricsLoading));
+  const requestLyrics = useCallback((load: () => Promise<LyricsDoc>, alive: () => boolean, trackId: string) =>
+    lyricsOwner.current.request(load, alive, trackId), []);
+  const readPlayerState = useCallback((authoritative = false) =>
+    lyricsOwner.current.readState(getState, setPlayerState, authoritative), []);
+  useEffect(() => () => lyricsOwner.current.dispose(), []);
 
   // Desvanecimiento automático del Toast
   useEffect(() => {
@@ -1275,18 +1282,13 @@ function App() {
 
     // Suscribirse a eventos de letras
     const unlistenLyricsPromise = listenLyricsEvents((event: LyricsEvent) => {
-      if (event.type === "Ready") {
-        setLyricsDoc(event.data);
-        setIsLyricsLoading(false);
-      } else if (event.type === "Unavailable") {
-        setIsLyricsLoading(false);
-      }
+      lyricsOwner.current.event(event);
     });
 
     // Fallback polling (cada 5s) solo para recovery
     const poll = async () => {
       try {
-        setPlayerState(await getState());
+        await readPlayerState(true);
       } catch (err) {
         console.error("state() poll failed:", err);
       }
@@ -1336,7 +1338,7 @@ function App() {
           prev ? { ...prev, connected: event.data.connected } : prev,
         );
         if (event.data.connected) {
-          getState().then(setPlayerState).catch(console.error);
+          readPlayerState(true).catch(console.error);
         }
         break;
       case "QueueUpdated":
@@ -1350,17 +1352,18 @@ function App() {
         break;
       case "PlaybackError":
         setError(event.data);
-        getState().then(setPlayerState).catch(console.error);
+        readPlayerState().catch(console.error);
         break;
       case "TrackStarted":
+        lyricsOwner.current.startTrack(event.data.id);
         lyricsAttemptedTrackIdRef.current = null;
         setLyricsDoc(null);
         setIsLyricsLoading(true);
-        getState().then(setPlayerState).catch(console.error);
+        readPlayerState().catch(console.error);
         break;
       case "TrackEnded":
       case "StateChanged":
-        getState().then(setPlayerState).catch(console.error);
+        readPlayerState().catch(console.error);
         break;
     }
   }, []);
@@ -1429,23 +1432,6 @@ function App() {
   const handleToggleLyrics = useCallback(() => {
     setIsLyricsOpen((prev) => {
       const next = !prev;
-      if (next && !lyricsDoc && playerState?.current) {
-        setIsLyricsLoading(true);
-        getLyrics({
-          track_id: playerState.current.id,
-          title: playerState.current.title,
-          artist: playerState.current.artist,
-          duration_seconds: playerState.current.duration_seconds,
-        })
-          .then((doc) => {
-            setLyricsDoc(doc);
-            setIsLyricsLoading(false);
-          })
-          .catch((err) => {
-            console.error("Error al cargar letra inicial:", err);
-            setIsLyricsLoading(false);
-          });
-      }
       return next;
     });
   }, [lyricsDoc, playerState?.current]);
@@ -1453,7 +1439,7 @@ function App() {
   // Auto-cargar letra si el modo inmersivo o el panel de letras se abren sin letra cargada
   useEffect(() => {
     const current = playerState?.current;
-    if (!current?.id) return;
+    if (!current?.id || !lyricsOwner.current.matches(current.id)) return;
 
     if (
       (isImmersiveOpen || isLyricsOpen) &&
@@ -1461,43 +1447,15 @@ function App() {
       lyricsAttemptedTrackIdRef.current !== current.id
     ) {
       lyricsAttemptedTrackIdRef.current = current.id;
-      setIsLyricsLoading(true);
-      getLyrics({
+      requestLyrics(() => getLyrics({
         track_id: current.id,
         title: current.title,
         artist: current.artist,
         duration_seconds: current.duration_seconds,
-      })
-        .then((doc) => {
-          setLyricsDoc(doc);
-        })
-        .catch((err) => {
-          console.error("Error al auto-cargar letra:", err);
-          setLyricsDoc({
-            track_id: current.id,
-            source: "none",
-            synced: false,
-            instrumental: false,
-            offset_ms: 0,
-            lines: [],
-            title: undefined,
-            artist: undefined,
-          });
-        })
-        .finally(() => {
-          setIsLyricsLoading(false);
-        });
+      }), () => true, current.id);
     }
   }, [isImmersiveOpen, isLyricsOpen, playerState?.current?.id, lyricsDoc]);
 
-  // Safety timeout: si la carga de letras tarda más de 7 segundos, desactivar el spinner automáticamente
-  useEffect(() => {
-    if (!isLyricsLoading) return;
-    const timer = setTimeout(() => {
-      setIsLyricsLoading(false);
-    }, 7000);
-    return () => clearTimeout(timer);
-  }, [isLyricsLoading]);
 
   const handlePlayQueueIndex = useCallback(async (index: number) => {
     try {
@@ -2438,7 +2396,7 @@ function App() {
                   speed={playerState?.speed ?? 1.0}
                   onClose={() => setIsLyricsOpen(false)}
                   onSeek={handleSeekCommit}
-                  onLyricsUpdated={(updated) => setLyricsDoc(updated)}
+                  requestLyrics={requestLyrics}
                 />
               </div>
             )}
@@ -2531,10 +2489,7 @@ function App() {
           onToggleMute={handleToggleMute}
           onSelectPreset={handleSelectPreset}
           onClose={() => setIsImmersiveOpen(false)}
-          onLyricsUpdated={(doc) => {
-            setLyricsDoc(doc);
-            setIsLyricsLoading(false);
-          }}
+          requestLyrics={requestLyrics}
         />
       )}
 

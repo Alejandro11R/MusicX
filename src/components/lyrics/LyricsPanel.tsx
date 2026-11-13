@@ -23,6 +23,7 @@ import {
 import { findActiveLineIndex, formatLyricTime } from "../../lib/lyrics";
 import { useLyricClock } from "./useLyricClock";
 import { useLyricsScroll } from "./useLyricsScroll";
+import { LyricsOwnership, requestInView } from "../../lib/async-ownership";
 import { useAlbumPalette } from "../../lib/palette";
 
 interface LyricsPanelProps {
@@ -34,7 +35,7 @@ interface LyricsPanelProps {
   speed?: number;
   onClose: () => void;
   onSeek: (seconds: number) => void;
-  onLyricsUpdated: (doc: LyricsDoc) => void;
+  requestLyrics: (load: () => Promise<LyricsDoc>, alive: () => boolean, trackId: string) => Promise<void>;
 }
 
 export function LyricsPanel({
@@ -46,7 +47,7 @@ export function LyricsPanel({
   speed = 1.0,
   onClose,
   onSeek,
-  onLyricsUpdated,
+  requestLyrics,
 }: LyricsPanelProps) {
   const [internalLoading, setInternalLoading] = useState(false);
   const [userOffsetMs, setUserOffsetMs] = useState(0);
@@ -55,6 +56,15 @@ export function LyricsPanel({
   const [isSearching, setIsSearching] = useState(false);
   const [candidates, setCandidates] = useState<LyricsCandidate[]>([]);
   const [showOffsetControls, setShowOffsetControls] = useState(false);
+
+  const requests = useRef(new LyricsOwnership<void>(setInternalLoading));
+  const searches = useRef(new LyricsOwnership<LyricsCandidate[]>(setIsSearching));
+  useEffect(() => {
+    requests.current.track(currentTrack?.id ?? null);
+    searches.current.track(currentTrack?.id ?? null);
+    return () => { requests.current.invalidate(); searches.current.invalidate(); };
+  }, [currentTrack?.id]);
+  const closeSearch = () => { searches.current.invalidate(); setCandidates([]); setShowSearchModal(false); };
 
   const palette = useAlbumPalette(currentTrack?.thumbnail_url);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -94,21 +104,13 @@ export function LyricsPanel({
 
   const handleRefresh = async () => {
     if (!currentTrack) return;
-    setInternalLoading(true);
-    try {
-      const doc = await getLyrics({
+    await requestInView(requests.current, requestLyrics, () => getLyrics({
         track_id: currentTrack.id,
         title: currentTrack.title,
         artist: currentTrack.artist,
         duration_seconds: currentTrack.duration_seconds,
         force: true,
-      });
-      onLyricsUpdated(doc);
-    } catch (err) {
-      console.error("Error recargando letras:", err);
-    } finally {
-      setInternalLoading(false);
-    }
+      }), currentTrack.id);
   };
 
   const handleOpenSearch = () => {
@@ -122,33 +124,18 @@ export function LyricsPanel({
     e.preventDefault();
     if (!currentTrack || !searchQuery.trim()) return;
 
-    setIsSearching(true);
-    try {
-      const results = await searchLyrics({
+    await searches.current.run(() => searchLyrics({
         track_id: currentTrack.id,
         title: searchQuery.trim(),
         artist: null,
-      });
-      setCandidates(results);
-    } catch (err) {
-      console.error("Error buscando alternativas de letras:", err);
-    } finally {
-      setIsSearching(false);
-    }
+      }), setCandidates);
   };
 
   const handleSelectCandidate = async (candidate: LyricsCandidate) => {
     if (!currentTrack) return;
-    setInternalLoading(true);
-    setShowSearchModal(false);
-    try {
-      const doc = await getLyricsById(candidate.id, currentTrack.id);
-      onLyricsUpdated(doc);
-    } catch (err) {
-      console.error("Error al cargar letra seleccionada:", err);
-    } finally {
-      setInternalLoading(false);
-    }
+    closeSearch();
+    await requestInView(requests.current, requestLyrics,
+      () => getLyricsById(candidate.id, currentTrack.id), currentTrack.id);
   };
 
   const isLoading = externalLoading || internalLoading;
@@ -363,7 +350,7 @@ export function LyricsPanel({
                 Buscar letra alternativa
               </h3>
               <button
-                onClick={() => setShowSearchModal(false)}
+                onClick={closeSearch}
                 className="p-1 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition"
               >
                 <X className="size-4" />
