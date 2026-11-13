@@ -1,4 +1,4 @@
-# Frontend lyrics ownership
+# Frontend async ownership
 
 Lyrics requests use latest-intent ownership: changing tracks or issuing a newer
 refresh/selection invalidates older success, failure and loading completion.
@@ -29,3 +29,37 @@ view's initiating track ID and rejects a mismatch before acquiring global reques
 ownership, so stale views cannot suppress newer events or pending requests.
 React rendering, visual behavior and real Tauri event timing still require manual
 validation.
+
+## Queue undo and Focus settings
+
+Queue-add undo captures the returned queue-item ID, not the last item or media
+ID. It checks the current queue before removal: duplicates and intervening adds
+survive, and an already removed original is a no-op. Queue events still refresh
+the display; success toast and error behavior remain unchanged.
+
+Focus duration and auto-pause setters never fabricate state after a void reply.
+The backend's events or a guarded getFocusState readback supply the full state,
+including the preserved running/paused interval. New settings intent and Focus
+events invalidate older readbacks (including the initial load); obsolete setter
+completion/errors cannot publish over them. Current failures remain errors,
+not successful settings updates. Controls and backend contracts are unchanged.
+Deferred tests execute the actual App callbacks/listener with the production
+Focus ownership helper across Focus/short/long breaks, running and paused.
+This is not rendered UI or live Tauri timing proof.
+
+## Search invalidation
+
+Every search invocation acquires ownership before checking empty input or local
+file extensions. Typing a query, clearing the field or pressing Escape invalidates
+pending remote publication and immediately releases its busy indicator. A newer
+remote search owns its own busy indicator: older success, failure and finalizers
+cannot change it. IPC itself is not cancelled; ownership guards UI publication.
+Current AbortError is expected and silent; current real failures remain visible.
+Remote results remain visible while a new query is pending; successful remote
+search clears selection, while local files select the single result as before.
+
+Deferred tests execute AST-extracted production App search, input-change, clear
+and keyboard callbacks with the production ownership helper. They cover local,
+empty, clear, Escape, typing and newer remote intent against stale success/error
+and completion, plus current success/failure/abort and fresh-result Enter. This
+is callback-level proof, not React rendering or live Tauri validation.

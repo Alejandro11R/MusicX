@@ -50,6 +50,8 @@ import { InteractiveTimeline } from "@/components/ui/InteractiveTimeline";
 import { cn } from "@/lib/utils";
 import { formatDuration, safeDuration, safePosition, seekTarget } from "@/lib/playback";
 import { LyricsCoordinator } from "./lib/async-ownership";
+import { SearchOwnership } from "./lib/search-ownership";
+import { FocusOwnership } from "./lib/action-ownership";
 import { extractDominantColor } from "@/lib/album-color";
 import {
   search,
@@ -1156,7 +1158,8 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const playerStateRef = useRef<PlayerState | null>(null);
   const prevVolumeRef = useRef<number>(100);
-  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchOwner = useRef(new SearchOwnership(setIsSearching));
+  const focusOwner = useRef(new FocusOwnership(setFocusState));
   const unlistenRef = useRef<(() => void) | null>(null);
   const seekGuardRef = useRef<{ target: number; at: number } | null>(null);
   const lyricsAttemptedTrackIdRef = useRef<string | null>(null);
@@ -1249,8 +1252,8 @@ function App() {
 
     // Cargar cola inicial y focus
     getQueue().then(setQueue).catch(console.error);
-    getFocusState().then(setFocusState).catch(console.error);
-    const unlistenFocusPromise = listenFocusEvents(setFocusState);
+    focusOwner.current.read(getFocusState).catch(console.error);
+    const unlistenFocusPromise = listenFocusEvents((state) => focusOwner.current.event(state));
 
     // Health check inicial
     health()
@@ -1387,16 +1390,15 @@ function App() {
   const handleAddToQueue = useCallback(async (track: SearchResult, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await addToQueue(track);
+      const added = await addToQueue(track);
       setToast({
         id: Math.random().toString(),
         text: `Añadida a la cola: ${track.title}`,
         onUndo: async () => {
           try {
             const currentQueue = await getQueue();
-            const last = currentQueue[currentQueue.length - 1];
-            if (last) {
-              await removeFromQueue(last.id);
+            if (currentQueue.some((item) => item.id === added.id)) {
+              await removeFromQueue(added.id);
             }
           } catch (err) {
             console.error("Error al deshacer:", err);
@@ -1537,28 +1539,22 @@ function App() {
   const [isFocusView, setIsFocusView] = useState(false);
 
   const handleSelectFocusDuration = useCallback(async (focusMins: number, breakMins: number) => {
+    const owns = focusOwner.current.begin();
     try {
       await setFocusDurations(focusMins * 60, breakMins * 60, (breakMins * 2) * 60);
-      setFocusState((prev) =>
-        prev
-          ? {
-              ...prev,
-              remaining_seconds: focusMins * 60,
-              total_seconds: focusMins * 60,
-            }
-          : prev
-      );
+      await focusOwner.current.read(getFocusState, owns);
     } catch (err) {
-      setError(String(err));
+      if (owns()) setError(String(err));
     }
   }, []);
 
   const handleToggleAutoPause = useCallback(async (enabled: boolean) => {
+    const owns = focusOwner.current.begin();
     try {
       await setFocusAutoPause(enabled);
-      setFocusState((prev) => (prev ? { ...prev, auto_pause_on_break: enabled } : prev));
+      await focusOwner.current.read(getFocusState, owns);
     } catch (err) {
-      setError(String(err));
+      if (owns()) setError(String(err));
     }
   }, []);
 
@@ -1733,6 +1729,7 @@ function App() {
   }
 
   async function runSearch(q: string) {
+    const ownsSearch = searchOwner.current.begin();
     if (!q.trim()) return;
 
     const audioExts = [".mp3", ".flac", ".wav", ".m4a", ".opus", ".ogg", ".aac"];
@@ -1753,26 +1750,20 @@ function App() {
       setSelectedIndex(0);
       return;
     }
-    
-    // Cancelar búsqueda anterior
-    searchAbortRef.current?.abort();
-    const controller = new AbortController();
-    searchAbortRef.current = controller;
 
     setError(null);
     setIsSearching(true);
     try {
       const found = await search(q, 10);
-      // Verificar si fue abortado
-      if (controller.signal.aborted) return;
+      if (!ownsSearch()) return;
       setResults(found);
       setResultsQuery(q);
       setSelectedIndex(null);
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return;
+      if (!ownsSearch() || (err instanceof Error && err.name === "AbortError")) return;
       setError(String(err));
     } finally {
-      if (!controller.signal.aborted) {
+      if (ownsSearch()) {
         setIsSearching(false);
       }
     }
@@ -1876,6 +1867,7 @@ function App() {
       );
     } else if (e.key === "Escape") {
       e.preventDefault();
+      searchOwner.current.invalidate();
       setQuery("");
       setResults([]);
       setResultsQuery("");
@@ -2138,7 +2130,10 @@ function App() {
                     <Input
                       ref={searchInputRef}
                       value={query}
-                      onChange={(e) => setQuery(e.currentTarget.value)}
+                      onChange={(e) => {
+                        searchOwner.current.invalidate();
+                        setQuery(e.currentTarget.value);
+                      }}
                       onKeyDown={handleSearchKeyDown}
                       placeholder="Buscar en YouTube, pegar enlace o arrastrar archivo local..."
                       autoComplete="off"
@@ -2163,6 +2158,7 @@ function App() {
                       <button
                         type="button"
                         onClick={() => {
+                          searchOwner.current.invalidate();
                           setQuery("");
                           setResults([]);
                           setResultsQuery("");
