@@ -1,4 +1,4 @@
-//! Preparation only: consumers must opt into this policy in the enforcement slice.
+//! Shared endpoint policy for Linux/macOS control and owned mpv transports.
 
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
 use std::io;
@@ -59,12 +59,26 @@ fn validate_chain(path: &Path) -> io::Result<()> {
 }
 
 /// Canonical root is deliberately independent of USER, UID and TMPDIR.
-pub fn runtime_dir(create: bool) -> io::Result<PathBuf> {
+pub fn runtime_root() -> &'static Path {
     #[cfg(target_os = "linux")]
-    let root = Path::new("/tmp");
+    { Path::new("/tmp") }
     #[cfg(target_os = "macos")]
-    let root = Path::new("/private/tmp");
-    resolve_at(root, create)
+    { Path::new("/private/tmp") }
+}
+
+pub fn runtime_dir(create: bool) -> io::Result<PathBuf> {
+    resolve_at(runtime_root(), create)
+}
+
+pub fn control_path_at(root: &Path, create: bool) -> io::Result<PathBuf> {
+    Ok(resolve_at(root, create)?.join("control.sock"))
+}
+
+/// Read-only CLI connection, shared with isolated consumer tests.
+pub async fn connect_control_at(root: &Path) -> io::Result<tokio::net::UnixStream> {
+    let path = control_path_at(root, false)?;
+    validate_socket(&path)?;
+    tokio::net::UnixStream::connect(path).await
 }
 
 /// `create=false` is the CLI contract: never create or repair filesystem state.
@@ -84,8 +98,13 @@ pub fn resolve_at(root: &Path, create: bool) -> io::Result<PathBuf> {
 
 fn private_parent(path: &Path) -> io::Result<()> {
     let parent = path.parent().ok_or_else(denied)?;
-    validate_chain(parent)?;
-    check_private(&fs::symlink_metadata(parent)?, effective_uid())
+    validate_private_dir(parent)
+}
+
+/// Validates that `path` already exists as an owned 0700 directory on a trusted ancestor chain.
+pub fn validate_private_dir(path: &Path) -> io::Result<()> {
+    validate_chain(path)?;
+    check_private(&fs::symlink_metadata(path)?, effective_uid())
 }
 
 /// Validate before connecting; never follow a socket symlink.
@@ -240,6 +259,7 @@ pub fn session_socket(root: &Path) -> io::Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};

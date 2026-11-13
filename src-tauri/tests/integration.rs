@@ -100,6 +100,15 @@ impl Fixture {
         let dir =
             std::env::temp_dir().join(format!("cadence-integ-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&dir)
+                .expect("create private fixture dir");
+        }
+        #[cfg(not(unix))]
         std::fs::create_dir_all(&dir).expect("create fixture dir");
 
         let wav = dir.join("tone.wav");
@@ -162,13 +171,27 @@ cat "$dir/search_result.json"
     /// Corta el proceso mpv por su socket IPC, como si se hubiera caído.
     async fn kill_mpv(&self) {
         use tokio::io::AsyncWriteExt;
-        let mut stream = tokio::net::UnixStream::connect(&self.socket)
-            .await
-            .expect("connect to mpv socket to kill it");
-        stream
-            .write_all(b"{\"command\":[\"quit\"]}\n")
-            .await
-            .expect("send quit to mpv");
+        let mut candidates = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.dir) {
+            for entry in entries.flatten() {
+                let sock = entry.path().join("ipc.sock");
+                if sock.exists() {
+                    candidates.push(sock);
+                }
+            }
+        }
+        candidates.push(self.socket.clone());
+
+        for sock in candidates {
+            if let Ok(mut stream) = tokio::net::UnixStream::connect(&sock).await {
+                stream
+                    .write_all(b"{\"command\":[\"quit\"]}\n")
+                    .await
+                    .expect("send quit to mpv");
+                return;
+            }
+        }
+        panic!("could not find live mpv socket in {}", self.dir.display());
     }
 }
 

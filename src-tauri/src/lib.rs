@@ -19,13 +19,6 @@ pub fn run() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let socket_path = if cfg!(windows) {
-        let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
-        std::path::PathBuf::from(format!(r"\\.\pipe\cadence-mpv-{}", user))
-    } else {
-        std::env::temp_dir().join("cadence-mpv.sock")
-    };
-
     #[allow(clippy::expect_used)]
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -36,6 +29,16 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let socket_path = services::local_transport::runtime_dir(true)?;
+            #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+            let socket_path = std::env::temp_dir().join("cadence-mpv.sock");
+            #[cfg(windows)]
+            let socket_path = {
+                let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
+                std::path::PathBuf::from(format!(r"\\.\pipe\cadence-mpv-{}", user))
+            };
+
             // Inicializar servicio de letras (LyricsService) con caché y cliente LRCLIB
             let lyrics = Arc::new(services::lyrics::LyricsService::new());
             app.manage(lyrics.clone());

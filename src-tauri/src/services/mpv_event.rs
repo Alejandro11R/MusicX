@@ -207,6 +207,27 @@ impl MpvPlayer {
         })
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn allocate_mpv_session(
+        configured_path: &Path,
+    ) -> Result<(PathBuf, crate::services::local_transport::EndpointLease), CadenceError> {
+        let root = if configured_path.extension().and_then(|s| s.to_str()) == Some("sock") {
+            configured_path.parent().ok_or_else(|| {
+                CadenceError::MpvIo(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "mpv socket path missing parent",
+                ))
+            })?
+        } else {
+            configured_path
+        };
+        let session_sock =
+            crate::services::local_transport::session_socket(root).map_err(CadenceError::MpvIo)?;
+        let lease = crate::services::local_transport::EndpointLease::acquire(&session_sock)
+            .map_err(CadenceError::MpvIo)?;
+        Ok((session_sock, lease))
+    }
+
     /// Supervisa el proceso mpv: arranca, escucha, y si la conexión se cae
     /// reinicia con backoff exponencial conservando el canal de comandos.
     async fn run_supervisor(
@@ -218,10 +239,32 @@ impl MpvPlayer {
         let mut backoff = RECONNECT_BACKOFF_MIN;
 
         loop {
-            let mut process = match Self::spawn_mpv(&socket_path) {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let (launch_socket, lease) = match Self::allocate_mpv_session(&socket_path) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    tracing::error!(error = %err, "Failed to allocate private mpv session, will retry");
+                    let _ = status_tx.send(MpvStatus::default());
+                    let _ = event_tx.send(MpvEvent::Disconnected);
+                    if !Self::sleep_or_shutdown(&mut cmd_rx, backoff).await {
+                        break;
+                    }
+                    backoff = Self::next_backoff(backoff);
+                    continue;
+                }
+            };
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let launch_socket = socket_path.clone();
+
+            let mut process = match Self::spawn_mpv(&launch_socket) {
                 Ok(child) => child,
                 Err(err) => {
                     tracing::error!(error = %err, "Failed to spawn mpv, will retry");
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    {
+                        let _ = lease.remove_socket();
+                        drop(lease);
+                    }
                     let _ = status_tx.send(MpvStatus::default());
                     let _ = event_tx.send(MpvEvent::Disconnected);
                     if !Self::sleep_or_shutdown(&mut cmd_rx, backoff).await {
@@ -232,11 +275,24 @@ impl MpvPlayer {
                 }
             };
 
-            let stream = match Self::wait_for_socket(&socket_path).await {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let wait_result = Self::wait_for_socket(&launch_socket, &lease).await;
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let wait_result = Self::wait_for_socket(&launch_socket).await;
+
+            let stream = match wait_result {
                 Ok(stream) => stream,
                 Err(err) => {
                     tracing::error!(error = %err, "mpv IPC socket never appeared, restarting");
                     let _ = process.kill().await;
+                    let _ = process.wait().await;
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    {
+                        let _ = lease.remove_socket();
+                        drop(lease);
+                    }
+                    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                    let _ = std::fs::remove_file(&launch_socket);
                     let _ = status_tx.send(MpvStatus::default());
                     let _ = event_tx.send(MpvEvent::Disconnected);
                     if !Self::sleep_or_shutdown(&mut cmd_rx, backoff).await {
@@ -272,7 +328,14 @@ impl MpvPlayer {
             status.connected = false;
             let _ = status_tx.send(status);
             let _ = process.kill().await;
-            let _ = std::fs::remove_file(&socket_path);
+            let _ = process.wait().await;
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let _ = lease.remove_socket();
+                drop(lease);
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let _ = std::fs::remove_file(&launch_socket);
 
             match outcome {
                 ConnectionOutcome::Shutdown => break,
@@ -319,9 +382,7 @@ impl MpvPlayer {
     }
 
     fn spawn_mpv(socket_path: &Path) -> Result<Child, CadenceError> {
-        // Si la app murió sin shutdown (SIGKILL, crash, `tauri dev`
-        // recompilando), mpv queda huérfano ocupando el socket.
-        kill_stale_mpv(socket_path);
+        #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
         let _ = std::fs::remove_file(socket_path);
 
         let ipc_arg = if cfg!(windows) {
@@ -363,19 +424,44 @@ impl MpvPlayer {
             }
         }
 
-        let child = cmd
-            .kill_on_drop(true)
+        cmd.kill_on_drop(true)
             .spawn()
-            .map_err(CadenceError::MpvSpawn)?;
-        // Dejamos constancia del hijo para poder limpiarlo en el próximo
-        // arranque si el proceso muere sin shutdown.
-        if let Some(pid) = child.id() {
-            let _ = std::fs::write(stale_pid_file(socket_path), pid.to_string());
-        }
-        Ok(child)
+            .map_err(CadenceError::MpvSpawn)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    async fn wait_for_socket(
+        socket_path: &Path,
+        lease: &crate::services::local_transport::EndpointLease,
+    ) -> Result<UnixStream, CadenceError> {
+        for _ in 0..SOCKET_CONNECT_MAX_ATTEMPTS {
+            match lease.secure_socket() {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    sleep(SOCKET_CONNECT_RETRY_DELAY).await;
+                    continue;
+                }
+                Err(e) => return Err(CadenceError::MpvIo(e)),
+            }
+            crate::services::local_transport::validate_socket(socket_path)
+                .map_err(CadenceError::MpvIo)?;
+            match UnixStream::connect(socket_path).await {
+                Ok(stream) => return Ok(stream),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                    ) =>
+                {
+                    sleep(SOCKET_CONNECT_RETRY_DELAY).await;
+                }
+                Err(e) => return Err(CadenceError::MpvIo(e)),
+            }
+        }
+        Err(CadenceError::MpvSocketTimeout(socket_path.to_path_buf()))
+    }
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     async fn wait_for_socket(socket_path: &Path) -> Result<UnixStream, CadenceError> {
         for _ in 0..SOCKET_CONNECT_MAX_ATTEMPTS {
             if let Ok(stream) = UnixStream::connect(socket_path).await {
@@ -776,69 +862,6 @@ fn resolve_pending(pending: &mut std::collections::HashMap<u64, PendingCommand>)
     }
 }
 
-/// Archivo auxiliar junto al socket con el PID de mpv. Se usa para limpiar un
-/// mpv huérfano dejado por una ejecución anterior que no llegó a apagarlo.
-fn stale_pid_file(socket_path: &Path) -> PathBuf {
-    let mut file = socket_path.as_os_str().to_owned();
-    file.push(".pid");
-    PathBuf::from(file)
-}
-
-/// Mata el mpv que quedó colgado del arranque anterior, si existe.
-#[cfg(unix)]
-fn kill_stale_mpv(socket_path: &Path) {
-    let pid_file = stale_pid_file(socket_path);
-    let Ok(content) = std::fs::read_to_string(&pid_file) else {
-        return;
-    };
-    let _ = std::fs::remove_file(&pid_file);
-
-    let Ok(pid) = content.trim().parse::<u32>() else {
-        return;
-    };
-    if pid == std::process::id() || !process_is_our_mpv(pid, socket_path) {
-        return;
-    }
-
-    tracing::warn!(pid, "killing stale mpv process left by a previous run");
-    let _ = std::process::Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status();
-}
-
-#[cfg(windows)]
-fn kill_stale_mpv(socket_path: &Path) {
-    let pid_file = stale_pid_file(socket_path);
-    let Ok(content) = std::fs::read_to_string(&pid_file) else {
-        return;
-    };
-    let _ = std::fs::remove_file(&pid_file);
-
-    let Ok(pid) = content.trim().parse::<u32>() else {
-        return;
-    };
-    if pid == std::process::id() {
-        return;
-    }
-
-    tracing::warn!(pid, "terminating stale mpv process on Windows");
-    let _ = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/F"])
-        .status();
-}
-
-/// Verifica en `/proc` que `pid` es, en efecto, nuestro mpv. Sin `/proc`
-/// (macOS / Windows) devolvemos false: ante la duda, no matamos.
-#[cfg(unix)]
-fn process_is_our_mpv(pid: u32, socket_path: &Path) -> bool {
-    let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
-        return false;
-    };
-    let text = String::from_utf8_lossy(&cmdline).replace('\0', " ");
-    text.contains("mpv") && text.contains(&format!("--input-ipc-server={}", socket_path.display()))
-}
-
 /// Lee un campo de `end-file` sea donde sea: mpv 0.40+ lo pone en el nivel
 /// del evento y las versiones anteriores dentro de `data`.
 fn end_file_field<'a>(message: &'a Value, field: &str) -> Option<&'a Value> {
@@ -1015,7 +1038,16 @@ mod tests {
 
     fn unique_socket_path() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!("cadence-mpv-test-{}-{id}.sock", std::process::id()))
+        let dir = std::env::temp_dir().join(format!("cadence-mpv-test-{}-{id}", std::process::id()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = std::fs::create_dir_all(&dir);
+        dir
     }
 
     #[test]
@@ -1154,23 +1186,61 @@ mod tests {
         assert_eq!(end_file_error(&message), None);
     }
 
-    #[test]
-    fn stale_pid_file_lives_next_to_the_socket() {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn allocate_mpv_session_creates_fresh_private_dirs_and_teardown_never_touches_files() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = unique_socket_path();
+        let (sock_a, lease_a) = MpvPlayer::allocate_mpv_session(&root).unwrap();
+        let (sock_b, lease_b) = MpvPlayer::allocate_mpv_session(&root).unwrap();
+        assert_ne!(sock_a, sock_b);
         assert_eq!(
-            stale_pid_file(Path::new("/tmp/a.sock")),
-            PathBuf::from("/tmp/a.sock.pid")
+            std::fs::metadata(sock_a.parent().unwrap())
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o700
         );
+
+        let pid_artifact = sock_a.with_extension("pid");
+        std::fs::write(&pid_artifact, b"unrelated").unwrap();
+        lease_a.remove_socket().unwrap();
+        assert_eq!(std::fs::read(&pid_artifact).unwrap(), b"unrelated");
+
+        std::fs::write(&sock_b, b"not a socket").unwrap();
+        assert!(MpvPlayer::wait_for_socket(&sock_b, &lease_b).await.is_err());
+        assert_eq!(std::fs::read(&sock_b).unwrap(), b"not a socket");
+
+        drop(lease_a);
+        drop(lease_b);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[test]
-    fn a_pid_that_is_not_our_mpv_is_never_killed() {
-        // Nuestro propio proceso de test no es mpv → nunca lo tocamos.
-        assert!(!process_is_our_mpv(
-            std::process::id(),
-            Path::new("/tmp/a.sock")
-        ));
-        // PID imposible: sin /proc no podemos verificar, así que no matamos.
-        assert!(!process_is_our_mpv(u32::MAX, Path::new("/tmp/a.sock")));
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn wait_for_socket_hardens_permissions_and_rejects_symlinks() {
+        use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+        let root = unique_socket_path();
+        let (sock, lease) = MpvPlayer::allocate_mpv_session(&root).unwrap();
+
+        let _listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666)).unwrap();
+
+        let stream = MpvPlayer::wait_for_socket(&sock, &lease).await.unwrap();
+        drop(stream);
+        assert_eq!(std::fs::metadata(&sock).unwrap().mode() & 0o777, 0o600);
+
+        drop(_listener);
+        lease.remove_socket().unwrap();
+        assert!(!sock.exists());
+
+        symlink(&root, &sock).unwrap();
+        assert!(MpvPlayer::wait_for_socket(&sock, &lease).await.is_err());
+
+        drop(lease);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[tokio::test]

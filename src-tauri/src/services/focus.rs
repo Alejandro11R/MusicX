@@ -82,7 +82,7 @@ impl FocusEngine {
         engine
     }
 
-    fn without_ticker(orchestrator: Arc<PlayerOrchestrator>) -> Arc<Self> {
+    pub(crate) fn without_ticker(orchestrator: Arc<PlayerOrchestrator>) -> Arc<Self> {
         let initial_state = FocusState::default();
         let (state_tx, _) = watch::channel(initial_state.clone());
         let (event_tx, _) = broadcast::channel(32);

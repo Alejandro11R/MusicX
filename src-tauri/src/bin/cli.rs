@@ -1,9 +1,9 @@
 use std::env;
 use std::process::exit;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 use tokio::net::UnixStream;
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::ClientOptions;
@@ -109,10 +109,12 @@ async fn main() {
         }
     };
 
-    let socket_path = cadence_lib::services::control_server::control_socket_path();
-
-    #[cfg(unix)]
-    let mut stream = match UnixStream::connect(&socket_path).await {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let mut stream = match cadence_lib::services::local_transport::connect_control_at(
+        cadence_lib::services::local_transport::runtime_root(),
+    )
+    .await
+    {
         Ok(s) => s,
         Err(_) => {
             eprintln!("⚠️ No se pudo conectar con Cadence. ¿Está la aplicación ejecutándose?");
@@ -120,8 +122,21 @@ async fn main() {
         }
     };
 
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    let mut stream = {
+        let socket_path = cadence_lib::services::control_server::control_socket_path();
+        match UnixStream::connect(&socket_path).await {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("⚠️ No se pudo conectar con Cadence. ¿Está la aplicación ejecutándose?");
+                exit(2);
+            }
+        }
+    };
+
     #[cfg(windows)]
     let mut stream = {
+        let socket_path = cadence_lib::services::control_server::control_socket_path();
         let pipe_name = socket_path.to_string_lossy();
         match ClientOptions::new().open(&pipe_name) {
             Ok(s) => s,
@@ -142,7 +157,7 @@ async fn main() {
     }
 
     let mut response_line = String::new();
-    let mut buf_reader = BufReader::new(reader);
+    let mut buf_reader = BufReader::new(reader.take(64 * 1024));
     if buf_reader.read_line(&mut response_line).await.is_err() {
         eprintln!("❌ Error leyendo respuesta de Cadence.");
         exit(1);
