@@ -5,9 +5,7 @@ use serde::Deserialize;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::errors::CadenceError;
-use crate::models::lyrics::{
-    LyricsCandidate, LyricsDoc, LyricsRequest, LyricsSource,
-};
+use crate::models::lyrics::{LyricsCandidate, LyricsDoc, LyricsRequest, LyricsSource};
 
 use super::parser::{parse_lrc, MAX_LINES};
 use super::text::{clean_artist, clean_title};
@@ -69,6 +67,19 @@ impl LrclibClient {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn for_test(base: Url) -> Self {
+        Self {
+            http: Client::builder()
+                .timeout(Duration::from_millis(100))
+                .build()
+                .unwrap(),
+            base,
+            gate: Semaphore::new(2),
+            last_request: Mutex::new(Instant::now() - MIN_INTERVAL),
+        }
+    }
+
     /// Match exacto. `Ok(None)` = 404 (no existe), no es un error de red.
     pub async fn get_exact(
         &self,
@@ -105,7 +116,7 @@ impl LrclibClient {
         &self,
         request: &LyricsRequest,
     ) -> Result<Option<LyricsDoc>, CadenceError> {
-        let candidates = self.search_tracks(request).await?;
+        let candidates = self.search_tracks(request, true).await?;
 
         let best = candidates
             .into_iter()
@@ -126,7 +137,7 @@ impl LrclibClient {
         request: &LyricsRequest,
     ) -> Result<Vec<LyricsCandidate>, CadenceError> {
         Ok(self
-            .search_tracks(request)
+            .search_tracks(request, false)
             .await?
             .into_iter()
             .map(|track| LyricsCandidate {
@@ -144,6 +155,7 @@ impl LrclibClient {
     async fn search_tracks(
         &self,
         request: &LyricsRequest,
+        require_match: bool,
     ) -> Result<Vec<LrclibTrack>, CadenceError> {
         let is_placeholder_artist = request
             .artist
@@ -156,6 +168,7 @@ impl LrclibClient {
             })
             .unwrap_or(true);
 
+        let mut urls = Vec::new();
         // Si tenemos un artista real, probar búsqueda exacta por track_name + artist_name primero
         if !is_placeholder_artist {
             let mut url = self.endpoint("api/search")?;
@@ -167,30 +180,14 @@ impl LrclibClient {
                 query.append_pair("artist_name", &clean_artist(artist));
             }
 
-            if let Ok(response) = self.request(url).await {
-                if response.status().is_success() {
-                    if let Ok(tracks) = response.json::<Vec<LrclibTrack>>().await {
-                        if !tracks.is_empty() {
-                            return Ok(tracks);
-                        }
-                    }
-                }
-            }
+            urls.push(url);
         }
 
         // Búsqueda libre `q`: extremadamente efectiva para títulos de YouTube
         let query_text = clean_title(&request.title, None);
         let mut url = self.endpoint("api/search")?;
         url.query_pairs_mut().append_pair("q", &query_text);
-        if let Ok(response) = self.request(url).await {
-            if response.status().is_success() {
-                if let Ok(tracks) = response.json::<Vec<LrclibTrack>>().await {
-                    if !tracks.is_empty() {
-                        return Ok(tracks);
-                    }
-                }
-            }
-        }
+        urls.push(url);
 
         // Si el título contiene " - ", probar con las partes individuales
         if let Some((part1, part2)) = request.title.split_once(" - ") {
@@ -198,19 +195,30 @@ impl LrclibClient {
                 let clean_part = clean_title(part, None);
                 let mut url = self.endpoint("api/search")?;
                 url.query_pairs_mut().append_pair("q", &clean_part);
-                if let Ok(response) = self.request(url).await {
-                    if response.status().is_success() {
-                        if let Ok(tracks) = response.json::<Vec<LrclibTrack>>().await {
-                            if !tracks.is_empty() {
-                                return Ok(tracks);
-                            }
-                        }
-                    }
-                }
+                urls.push(url);
             }
         }
 
-        Ok(Vec::new())
+        let mut first_error = None;
+        for url in urls {
+            match self.read_json::<Vec<LrclibTrack>>(url).await {
+                Ok(Some(tracks))
+                    if !tracks.is_empty()
+                        && (!require_match
+                            || tracks.iter().any(|track| score(track, request) >= 40)) =>
+                {
+                    return Ok(tracks);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(Vec::new()),
+        }
     }
 
     pub async fn get_by_id(&self, id: i64) -> Result<Option<LyricsDoc>, CadenceError> {
@@ -240,6 +248,13 @@ impl LrclibClient {
     }
 
     async fn send(&self, url: Url) -> Result<Option<LrclibTrack>, CadenceError> {
+        self.read_json(url).await
+    }
+
+    async fn read_json<T: serde::de::DeserializeOwned>(
+        &self,
+        url: Url,
+    ) -> Result<Option<T>, CadenceError> {
         let response = self.request(url).await?;
         let status = response.status();
         if status == StatusCode::NOT_FOUND {
@@ -251,16 +266,19 @@ impl LrclibClient {
             });
         }
 
-        let bytes = response.bytes().await.map_err(|error| CadenceError::Lyrics {
-            message: format!("lrclib body: {error}"),
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| CadenceError::Lyrics {
+                message: format!("lrclib body: {error}"),
+            })?;
         if bytes.len() > MAX_RESPONSE_BYTES {
             return Err(CadenceError::Lyrics {
                 message: "lrclib response too large".into(),
             });
         }
 
-        serde_json::from_slice::<LrclibTrack>(&bytes)
+        serde_json::from_slice::<T>(&bytes)
             .map(Some)
             .map_err(|error| CadenceError::Lyrics {
                 message: format!("lrclib parse: {error}"),
@@ -268,9 +286,13 @@ impl LrclibClient {
     }
 
     async fn request(&self, url: Url) -> Result<reqwest::Response, CadenceError> {
-        let _permit = self.gate.acquire().await.map_err(|_| CadenceError::Lyrics {
-            message: "lrclib gate closed".into(),
-        })?;
+        let _permit = self
+            .gate
+            .acquire()
+            .await
+            .map_err(|_| CadenceError::Lyrics {
+                message: "lrclib gate closed".into(),
+            })?;
 
         {
             let mut last = self.last_request.lock().await;
@@ -371,17 +393,26 @@ fn score(candidate: &LrclibTrack, request: &LyricsRequest) -> i32 {
         score += 60;
     } else {
         let title_words: Vec<&str> = raw_title.split_whitespace().collect();
-        let matched = title_words.iter().filter(|w| candidate_title.contains(**w)).count();
+        let matched = title_words
+            .iter()
+            .filter(|w| candidate_title.contains(**w))
+            .count();
         if !title_words.is_empty() {
             score += ((matched as f32 / title_words.len() as f32) * 45.0) as i32;
         }
     }
 
-    if let Some(artist) = request.artist.as_deref().filter(|a| !a.eq_ignore_ascii_case("cadence")) {
+    if let Some(artist) = request
+        .artist
+        .as_deref()
+        .filter(|a| !a.eq_ignore_ascii_case("cadence"))
+    {
         let wanted_artist = artist.to_lowercase();
         if candidate_artist == wanted_artist || raw_title.contains(&candidate_artist) {
             score += 40;
-        } else if candidate_artist.contains(&wanted_artist) || wanted_artist.contains(&candidate_artist) {
+        } else if candidate_artist.contains(&wanted_artist)
+            || wanted_artist.contains(&candidate_artist)
+        {
             score += 20;
         }
     } else if raw_title.contains(&candidate_artist) {

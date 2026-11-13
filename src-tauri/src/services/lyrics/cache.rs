@@ -93,6 +93,15 @@ impl LyricsCache {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn isolated(dir: PathBuf) -> Self {
+        std::fs::create_dir_all(&dir).unwrap();
+        Self {
+            memory: Mutex::new(TinyLru::new(MEMORY_CAPACITY)),
+            dir,
+        }
+    }
+
     /// Lee memoria y, si falla, disco.
     pub async fn get(&self, key: &str) -> Option<Arc<LyricsDoc>> {
         if let Ok(mut memory) = self.memory.lock() {
@@ -188,7 +197,8 @@ impl LyricsCache {
     }
 
     fn path_for(&self, key: &str) -> PathBuf {
-        self.dir.join(format!("{:016x}.json", fnv1a64(key.as_bytes())))
+        self.dir
+            .join(format!("{:016x}.json", fnv1a64(key.as_bytes())))
     }
 }
 
@@ -226,7 +236,9 @@ fn scan_dir(dir: &Path) -> (u64, u64) {
 
 fn prune(dir: &Path) {
     let mut entries: Vec<(PathBuf, u64, u64)> = Vec::new();
-    let Ok(read_dir) = std::fs::read_dir(dir) else { return };
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
 
     for entry in read_dir.flatten() {
         let path = entry.path();
