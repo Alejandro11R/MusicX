@@ -19,6 +19,11 @@ jobs:
   security-and-lint:
     name: Lint & SAST Checks
     runs-on: ubuntu-latest
+    env:
+      CFLAGS: "-march=x86-64 -mtune=generic"
+      CXXFLAGS: "-march=x86-64 -mtune=generic"
+      AWS_LC_SYS_CFLAGS: "-march=x86-64 -mtune=generic"
+      RUSTFLAGS: "-C target-cpu=x86-64"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,6 +45,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "src-tauri -> target"
+          prefix-key: "v2-x86_64-baseline"
 
       - name: Install system dependencies (Linux)
         run: |
