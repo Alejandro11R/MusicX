@@ -20,7 +20,7 @@ import {
   searchLyrics,
   getLyricsById,
 } from "../../lib/tauri";
-import { findActiveLineIndex, formatLyricTime } from "../../lib/lyrics";
+import { findActiveLineIndex, formatLyricTime, getWordProgress } from "../../lib/lyrics";
 import { useLyricClock } from "./useLyricClock";
 import { useLyricsScroll } from "./useLyricsScroll";
 import { LyricsOwnership, requestInView } from "../../lib/async-ownership";
@@ -83,6 +83,7 @@ export function LyricsPanel({
 
   // Offset total = offset embebido en el LRC + ajuste fino del usuario
   const totalOffsetMs = (lyricsDoc?.offset_ms || 0) + userOffsetMs;
+  const currentMs = Math.max(0, Math.floor(interpolatedTime * 1000) + totalOffsetMs);
 
   const activeLineIndex = isSynced
     ? findActiveLineIndex(lines, interpolatedTime, totalOffsetMs)
@@ -306,7 +307,40 @@ export function LyricsPanel({
                       <Play className="w-4 h-4 fill-current text-white/70" />
                     </span>
                   )}
-                  <span>{line.text || "•••"}</span>
+                  {!line.text.trim() ? (
+                    <span
+                      className={`lyric-interlude-dots${isActive ? " lyric-interlude-active" : ""}`}
+                      aria-label="Interludio instrumental"
+                    >
+                      <span className="lyric-interlude-dot" />
+                      <span className="lyric-interlude-dot" />
+                      <span className="lyric-interlude-dot" />
+                    </span>
+                  ) : isActive && isSynced && line.words && line.words.length > 0 ? (
+                    <span>
+                      {line.words.map((word, wIdx) => {
+                        const pct = Math.round(getWordProgress(word, currentMs) * 100);
+                        return (
+                          <span
+                            key={`${word.time_ms}_${wIdx}`}
+                            className="lyric-word-token"
+                            style={{
+                              backgroundImage: `linear-gradient(90deg, #ffffff ${pct}%, rgba(255, 255, 255, 0.38) ${pct}%)`,
+                              WebkitBackgroundClip: "text",
+                              backgroundClip: "text",
+                              color: "transparent",
+                              transform: pct > 0 && pct < 100 ? "translateY(-1px)" : undefined,
+                            }}
+                          >
+                            {word.text}
+                            {wIdx < line.words!.length - 1 ? " " : ""}
+                          </span>
+                        );
+                      })}
+                    </span>
+                  ) : (
+                    <span>{line.text}</span>
+                  )}
                 </div>
               );
             })}

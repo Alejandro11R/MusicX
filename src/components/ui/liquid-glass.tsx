@@ -16,12 +16,40 @@ export function GlassPanel({
   className,
   pressed,
   children,
+  onPointerMove,
   ...props
 }: GlassPanelProps) {
+  const panelRef = React.useRef<HTMLDivElement>(null)
+  const rafRef = React.useRef<number | null>(null)
+
+  React.useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current)
+      }
+    }
+  }, [])
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    onPointerMove?.(e)
+    const el = panelRef.current
+    if (!el || rafRef.current !== null) return
+    const clientX = e.clientX
+    const clientY = e.clientY
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null
+      const rect = el.getBoundingClientRect()
+      el.style.setProperty("--pointer-x", `${Math.round(clientX - rect.left)}px`)
+      el.style.setProperty("--pointer-y", `${Math.round(clientY - rect.top)}px`)
+    })
+  }
+
   return (
     <div
+      ref={panelRef}
       data-pressed={pressed ? true : undefined}
       className={cn("glass-panel rounded-3xl p-4", className)}
+      onPointerMove={handlePointerMove}
       {...props}
     >
       {children}
@@ -135,11 +163,19 @@ export function GlassSlider({
  * ============================================================ */
 interface MeshBackgroundProps {
   playing?: boolean
+  palette?: { primary: string; secondary: string; ambient: string }
 }
 
-export function MeshBackground({ playing }: MeshBackgroundProps) {
-  const accent = playing ? "rgba(45, 212, 191, 0.25)" : "rgba(99, 102, 241, 0.15)"
-  const accent2 = playing ? "rgba(16, 185, 129, 0.2)" : "rgba(139, 92, 246, 0.12)"
+export function MeshBackground({ playing, palette }: MeshBackgroundProps) {
+  const accent = playing
+    ? (palette?.primary ?? "rgba(45, 212, 191, 0.25)")
+    : "rgba(99, 102, 241, 0.15)"
+  const accent2 = playing
+    ? (palette?.secondary ?? "rgba(16, 185, 129, 0.2)")
+    : "rgba(139, 92, 246, 0.12)"
+  const accent3 = playing
+    ? (palette?.ambient ?? "rgba(255, 255, 255, 0.06)")
+    : "rgba(255, 255, 255, 0.06)"
 
   return (
     <div className="mesh-bg">
@@ -152,6 +188,7 @@ export function MeshBackground({ playing }: MeshBackgroundProps) {
           left: "-10%",
           background: accent,
           animationDelay: "0s",
+          transition: "background 900ms ease",
         }}
       />
       <div
@@ -163,6 +200,7 @@ export function MeshBackground({ playing }: MeshBackgroundProps) {
           right: "-5%",
           background: accent2,
           animationDelay: "-4s",
+          transition: "background 900ms ease",
         }}
       />
       <div
@@ -172,8 +210,9 @@ export function MeshBackground({ playing }: MeshBackgroundProps) {
           height: "45vw",
           top: "25%",
           left: "55%",
-          background: "rgba(255, 255, 255, 0.06)",
+          background: accent3,
           animationDelay: "-8s",
+          transition: "background 900ms ease",
         }}
       />
     </div>

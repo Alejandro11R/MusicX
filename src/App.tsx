@@ -59,6 +59,8 @@ import { LyricsCoordinator } from "./lib/async-ownership";
 import { SearchOwnership } from "./lib/search-ownership";
 import { FocusOwnership } from "./lib/action-ownership";
 import { extractDominantColor } from "@/lib/album-color";
+import { useAlbumPalette } from "@/lib/palette";
+import { findActiveLineIndex } from "@/lib/lyrics";
 import {
   search,
   play,
@@ -126,6 +128,8 @@ interface AlbumHeroProps {
   isPlaying: boolean;
   isLooping: boolean;
   isLyricsOpen: boolean;
+  palette?: { primary: string; secondary: string; ambient: string };
+  currentLyric?: string | null;
   onTogglePlayback: () => void;
   onToggleLoop: () => void;
   onToggleLyrics: () => void;
@@ -137,6 +141,8 @@ const AlbumHero = React.memo(function AlbumHero({
   isPlaying,
   isLooping,
   isLyricsOpen,
+  palette,
+  currentLyric,
   onTogglePlayback,
   onToggleLoop,
   onToggleLyrics,
@@ -145,10 +151,19 @@ const AlbumHero = React.memo(function AlbumHero({
   if (!currentTrack) return null;
 
   return (
-    <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-4 p-4 rounded-2xl bg-white/[0.03] border border-white/10 shadow-lg backdrop-blur-md animate-in fade-in duration-200">
+    <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-4 p-4 rounded-2xl bg-white/[0.03] border border-white/10 shadow-lg backdrop-blur-md overflow-hidden animate-in fade-in duration-200">
+      {palette && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-45 transition-all duration-700"
+          style={{
+            background: `radial-gradient(110% 100% at 15% 20%, ${palette.primary}, transparent 65%), radial-gradient(80% 90% at 90% 80%, ${palette.secondary}, transparent 70%)`,
+          }}
+        />
+      )}
       <div
         onClick={onOpenImmersive}
-        className="relative size-28 sm:size-32 shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-[0_12px_28px_rgba(0,0,0,0.6)] cursor-pointer hover:scale-102 active:scale-98 transition-all group"
+        className="relative z-10 size-28 sm:size-32 shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-[0_12px_28px_rgba(0,0,0,0.6)] cursor-pointer hover:scale-102 active:scale-98 transition-all group"
         title="Abrir vista inmersiva (I)"
       >
         {currentTrack.thumbnail_url ? (
@@ -164,7 +179,7 @@ const AlbumHero = React.memo(function AlbumHero({
         )}
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-1 text-center sm:text-left">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col gap-1 text-center sm:text-left">
         <span className="text-[10px] uppercase tracking-wider font-semibold text-teal-400">
           En reproducción
         </span>
@@ -174,6 +189,18 @@ const AlbumHero = React.memo(function AlbumHero({
         <p className="text-xs text-white/60 truncate">
           {currentTrack.artist || "Cadence Music"}
         </p>
+
+        {currentLyric && !isLyricsOpen && (
+          <button
+            type="button"
+            onClick={onToggleLyrics}
+            className="mt-1 inline-flex max-w-full items-center justify-center sm:justify-start gap-1.5 rounded-full bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 px-2.5 py-1 text-[11px] font-medium text-teal-200/95 transition-colors cursor-pointer"
+            title="Abrir panel de letras (Y)"
+          >
+            <Mic2 className="size-3 shrink-0 text-teal-300 animate-pulse" />
+            <span className="truncate">{currentLyric}</span>
+          </button>
+        )}
 
         <div className="flex items-center justify-center sm:justify-start gap-2 pt-2">
           <button
@@ -2004,10 +2031,21 @@ function App() {
   // Memoized derived values
   const searchResults = useMemo(() => results, [results]);
   const recentTracksMemo = useMemo(() => recentTracks, [recentTracks]);
+  const albumPalette = useAlbumPalette(playerState?.current?.thumbnail_url);
+  const currentHeroLyric = useMemo(() => {
+    const lines = lyricsDoc?.lines ?? [];
+    if (!lines.length || !lyricsDoc?.synced) return null;
+    const idx = findActiveLineIndex(
+      lines,
+      playerState?.position_seconds ?? 0,
+      lyricsDoc?.offset_ms ?? 0,
+    );
+    return idx >= 0 && lines[idx]?.text?.trim() ? lines[idx].text : null;
+  }, [lyricsDoc, playerState?.position_seconds]);
 
   return (
     <main className="flex h-screen w-screen p-2.5">
-      <MeshBackground playing={isPlaying} />
+      <MeshBackground playing={isPlaying} palette={albumPalette} />
       <GlassPanel pressed={false} className="relative flex h-full w-full flex-col gap-3 rounded-[24px] p-4 overflow-hidden">
         {isDragOver && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/85 backdrop-blur-md rounded-[24px] border-2 border-dashed border-teal-400 select-none animate-in fade-in duration-150">
@@ -2230,6 +2268,29 @@ function App() {
                   />
                 ) : (
                   <>
+                    {/* Skeleton Shimmer mientras busca sin resultados previos */}
+                    {isSearching && results.length === 0 && (
+                      <div
+                        className="flex min-h-0 flex-1 flex-col gap-1.5 pr-1 animate-in fade-in duration-150"
+                        aria-label="Buscando pistas"
+                      >
+                        {Array.from({ length: 5 }).map((_, idx) => (
+                          <div
+                            key={idx}
+                            className="flex w-full items-center gap-3 rounded-xl p-2 bg-white/[0.03] border border-white/[0.06] animate-pulse"
+                            style={{ animationDelay: `${idx * 75}ms` }}
+                          >
+                            <div className="size-10 shrink-0 rounded-lg bg-white/10" />
+                            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                              <div className="h-3 w-3/4 rounded-md bg-white/10" />
+                              <div className="h-2.5 w-2/5 rounded-md bg-white/[0.06]" />
+                            </div>
+                            <div className="h-2.5 w-8 shrink-0 rounded-md bg-white/[0.06]" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Resultados de Búsqueda */}
                     {results.length > 0 && (
                       <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -2297,12 +2358,14 @@ function App() {
                     )}
 
                     {/* Album Hero banner estilo Apple Music cuando hay pista activa y no hay búsqueda */}
-                    {results.length === 0 && resultsQuery === "" && playerState?.current && (
+                    {!isSearching && results.length === 0 && resultsQuery === "" && playerState?.current && (
                       <AlbumHero
                         currentTrack={playerState.current}
                         isPlaying={isPlaying}
                         isLooping={isLooping}
                         isLyricsOpen={isLyricsOpen}
+                        palette={albumPalette}
+                        currentLyric={currentHeroLyric}
                         onTogglePlayback={handleTogglePlayback}
                         onToggleLoop={handleToggleLoop}
                         onToggleLyrics={handleToggleLyrics}
@@ -2311,7 +2374,7 @@ function App() {
                     )}
 
                     {/* Historial Reciente (cuando no hay búsqueda activa) */}
-                    {results.length === 0 && resultsQuery === "" && recentTracksMemo.length > 0 && (
+                    {!isSearching && results.length === 0 && resultsQuery === "" && recentTracksMemo.length > 0 && (
                       <div className="flex min-h-0 flex-1 flex-col gap-2">
                         <div className="flex items-center justify-between px-1">
                           <span className="flex items-center gap-1.5 text-xs font-medium text-white/70">
@@ -2364,7 +2427,7 @@ function App() {
                     )}
 
                     {/* Pantalla vacía inicial de concentración si no hay nada en reproducción */}
-                    {results.length === 0 && resultsQuery === "" && !playerState?.current && recentTracksMemo.length === 0 && (
+                    {!isSearching && results.length === 0 && resultsQuery === "" && !playerState?.current && recentTracksMemo.length === 0 && (
                       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center p-6 select-none">
                         <div className="size-14 rounded-2xl liquid-pill flex items-center justify-center text-teal-300/80 shadow-lg">
                           <Headphones className="size-7" />

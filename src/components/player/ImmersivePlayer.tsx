@@ -28,7 +28,7 @@ import {
   getLyricsById,
 } from "../../lib/tauri";
 import { safeDuration, safePosition, formatDuration } from "../../lib/playback";
-import { findActiveLineIndex } from "../../lib/lyrics";
+import { findActiveLineIndex, getWordProgress } from "../../lib/lyrics";
 import { useLyricClock } from "../lyrics/useLyricClock";
 import { useLyricsScroll } from "../lyrics/useLyricsScroll";
 import { useAlbumPalette } from "../../lib/palette";
@@ -61,6 +61,15 @@ interface ImmersivePlayerProps {
   requestLyrics: (load: () => Promise<LyricsDoc>, alive: () => boolean, trackId: string) => Promise<void>;
 }
 
+const IMMERSIVE_AUDIO_PRESETS: { id: AudioPreset; label: string; icon: string }[] = [
+  { id: "normal", label: "Normal", icon: "✨" },
+  { id: "lofi", label: "Lo-Fi", icon: "☕" },
+  { id: "bass_boost", label: "Bass", icon: "🔊" },
+  { id: "loudnorm", label: "Loudnorm", icon: "⚖️" },
+  { id: "slowed_reverb", label: "Slowed", icon: "🌙" },
+  { id: "nightcore", label: "Nightcore", icon: "⚡" },
+];
+
 export function ImmersivePlayer({
   currentTrack,
   playerState,
@@ -79,6 +88,7 @@ export function ImmersivePlayer({
   onVolumePreview,
   onVolumeCommit,
   onToggleMute,
+  onSelectPreset,
   onClose,
   requestLyrics,
 }: ImmersivePlayerProps) {
@@ -126,6 +136,7 @@ export function ImmersivePlayer({
   const lines = lyricsDoc?.lines || [];
   const isSynced = Boolean(lyricsDoc?.synced && lines.length > 0);
   const totalOffsetMs = lyricsDoc?.offset_ms || 0;
+  const currentMs = Math.max(0, Math.floor(interpolatedTime * 1000) + totalOffsetMs);
 
   const activeLineIndex = isSynced
     ? findActiveLineIndex(lines, interpolatedTime, totalOffsetMs)
@@ -291,13 +302,24 @@ export function ImmersivePlayer({
 
           {/* Metadata de la pista */}
           <div className="w-full flex flex-col gap-0.5 text-center md:text-left">
-            <div className="flex items-center justify-center md:justify-start gap-2">
-              <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-white tracking-tight truncate">
+            <div className="flex items-center justify-center md:justify-start gap-2 flex-wrap">
+              <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-white tracking-tight truncate max-w-full">
                 {currentTrack?.title || "Sin reproducción"}
               </h1>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white/20 text-white/90 border border-white/20 shrink-0">
-                E
-              </span>
+              {lyricsDoc?.source && lyricsDoc.source !== "none" && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-white/15 text-white/85 border border-white/15 shrink-0">
+                  {lyricsDoc.source === "lrclib"
+                    ? "LRCLib"
+                    : lyricsDoc.source === "local_lrc"
+                    ? "LRC"
+                    : "ID3"}
+                </span>
+              )}
+              {speed !== 1.0 && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-teal-400/20 text-teal-200 border border-teal-400/30 shrink-0">
+                  {speed.toFixed(2)}x
+                </span>
+              )}
             </div>
             <p className="text-xs sm:text-sm font-medium text-white/60 truncate">
               {currentTrack?.artist || "Cadence"}
@@ -408,6 +430,32 @@ export function ImmersivePlayer({
               )}
             </div>
           </div>
+
+          {/* Barra compacta de Audio FX Presets en modo inmersivo */}
+          {onSelectPreset && (
+            <div className="w-full flex items-center justify-center md:justify-start gap-1.5 flex-wrap pt-1">
+              {IMMERSIVE_AUDIO_PRESETS.map((preset) => {
+                const active = (playerState?.audio_preset ?? "normal") === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => onSelectPreset(preset.id)}
+                    className={cn(
+                      "flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] border transition-all cursor-pointer active:scale-95",
+                      active
+                        ? "bg-white/25 border-white/45 text-white font-semibold shadow-sm"
+                        : "bg-white/[0.06] border-white/10 text-white/65 hover:text-white hover:bg-white/[0.12]",
+                    )}
+                    title={`Preset ${preset.label}`}
+                  >
+                    <span>{preset.icon}</span>
+                    <span>{preset.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Columna Derecha: Letras Tipográficas a Gran Escala con Desenfoque Cinemático */}
@@ -451,7 +499,43 @@ export function ImmersivePlayer({
                         !isSynced && "text-white/80 text-xl sm:text-2xl opacity-90"
                       )}
                     >
-                      <span>{line.text || "•••"}</span>
+                      {!line.text.trim() ? (
+                        <span
+                          className={cn(
+                            "lyric-interlude-dots",
+                            isActive && "lyric-interlude-active",
+                          )}
+                          aria-label="Interludio instrumental"
+                        >
+                          <span className="lyric-interlude-dot" />
+                          <span className="lyric-interlude-dot" />
+                          <span className="lyric-interlude-dot" />
+                        </span>
+                      ) : isActive && isSynced && line.words && line.words.length > 0 ? (
+                        <span>
+                          {line.words.map((word, wIdx) => {
+                            const pct = Math.round(getWordProgress(word, currentMs) * 100);
+                            return (
+                              <span
+                                key={`${word.time_ms}_${wIdx}`}
+                                className="lyric-word-token"
+                                style={{
+                                  backgroundImage: `linear-gradient(90deg, #ffffff ${pct}%, rgba(255, 255, 255, 0.38) ${pct}%)`,
+                                  WebkitBackgroundClip: "text",
+                                  backgroundClip: "text",
+                                  color: "transparent",
+                                  transform: pct > 0 && pct < 100 ? "translateY(-1px)" : undefined,
+                                }}
+                              >
+                                {word.text}
+                                {wIdx < line.words!.length - 1 ? " " : ""}
+                              </span>
+                            );
+                          })}
+                        </span>
+                      ) : (
+                        <span>{line.text}</span>
+                      )}
                     </div>
                   );
                 })}
@@ -586,11 +670,13 @@ export function ImmersivePlayer({
           {/* Botón flotante para reanudar el auto-scroll */}
           {isSynced && isUserScrolling && activeLineIndex >= 0 && (
             <button
+              type="button"
               onClick={resumeScroll}
-              className="absolute bottom-4 right-4 z-20 flex items-center gap-1.5 px-4 py-2 rounded-full bg-white/20 hover:bg-white/30 text-white text-xs font-semibold backdrop-blur-xl border border-white/20 shadow-xl transition-all cursor-pointer animate-in fade-in"
+              className="lyrics-resume-scroll-btn"
+              title="Centrar en la línea activa"
             >
               <ArrowDown className="size-3.5 animate-bounce" />
-              <span>Sincronizar</span>
+              <span>Reanudar sincronización</span>
             </button>
           )}
         </div>
